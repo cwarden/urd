@@ -284,10 +284,18 @@ func (c *Config) setVariable(name, value string) error {
 	case "untimed_template", "timed_bold", "untimed_bold", "description_first", "schedule_12_hour", "busy_algorithm", "goto_big_endian", "untimed_duration", "status_12_hour", "center_cursor":
 		// TODO: Implement additional display options
 
+	case "template0", "template1", "template2", "template3", "template4", "template5", "template6", "template7", "template8", "template9":
+		// TODO: Implement template configurations for quick event creation
+
+	case "busy_level1", "busy_level2", "busy_level3", "busy_level4":
+		// TODO: Implement busy level colors
+
+	case "selection_12_hour", "description_12_hour", "quick_date_US", "number_weeks", "home_sticky", "advance_warning", "untimed_window_width":
+		// TODO: Implement additional display and behavior options
+
 	default:
-		// For now, silently ignore unknown config variables to maintain compatibility
-		// TODO: Implement full config variable support
-		return nil
+		// Return error for unknown config variables
+		return fmt.Errorf("unknown configuration variable: %s", name)
 	}
 
 	return nil

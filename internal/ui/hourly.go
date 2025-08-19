@@ -14,17 +14,17 @@ import (
 func (m *Model) viewHourlySchedule() string {
 	var sections []string
 
-	// Top section: Schedule on left, Calendar + Untimed on right
+	// Top section: Schedule on left, Calendar + Selected Events on right
 	scheduleView := m.renderSchedule()
 	calendarView := m.renderMiniCalendar()
-	untimedView := m.renderUntimedList()
+	selectedEventsView := m.renderSelectedSlotEvents()
 
-	// Right side: calendar above, untimed below
+	// Right side: calendar above, selected events below
 	rightSide := lipgloss.JoinVertical(
 		lipgloss.Left,
 		calendarView,
 		"",
-		untimedView,
+		selectedEventsView,
 	)
 
 	// Main content: schedule left, calendar/untimed right
@@ -40,10 +40,6 @@ func (m *Model) viewHourlySchedule() string {
 		rightSide,
 	)
 	sections = append(sections, mainContent)
-
-	// Description section at the bottom
-	description := m.renderEventDescription()
-	sections = append(sections, description)
 
 	// Status bar
 	status := m.renderScheduleStatusBar()
@@ -124,28 +120,60 @@ func (m *Model) renderSchedule() string {
 		// Build the line with events
 		line := timeStr
 		if events, ok := eventsBySlot[globalSlot]; ok && len(events) > 0 {
-			// Add events with indentation based on column assignment
-			eventParts := []string{}
+			// Build the line with events in proper columns
+			// Start with the time
+			line = timeStr + "  "
+
+			// Create a map of column to event for this slot
+			columnEvents := make(map[int]string)
+			maxColumn := 0
+
+			// Calculate available width for event text
+			scheduleWidth := m.width * 2 / 3
+			timeWidth := 7 // "HH:MM  "
+			availableWidth := scheduleWidth - timeWidth
+			// Allow more space per column, but still limit for readability
+			maxLen := 35
+			if availableWidth > 80 {
+				maxLen = 45
+			}
+
 			for _, event := range events {
 				column := eventColumns[event.ID]
-				indent := strings.Repeat("  ", column) // 2 spaces per indentation level
+				if column > maxColumn {
+					maxColumn = column
+				}
 
 				eventStr := event.Description
-				// Truncate to fit
-				maxLen := (m.width * 2 / 3) - 7 - (column * 2)
-				if maxLen < 20 {
-					maxLen = 20
+				if m.showEventIDs {
+					// Show event ID for debugging
+					eventStr = fmt.Sprintf("[%s] %s", event.ID, event.Description)
 				}
 				if len(eventStr) > maxLen {
 					eventStr = eventStr[:maxLen-3] + "..."
 				}
 
-				eventParts = append(eventParts, indent+eventStr)
+				// Only store the first event for each column (shouldn't have duplicates)
+				if _, exists := columnEvents[column]; !exists {
+					columnEvents[column] = eventStr
+				}
 			}
 
-			// Join all events for this slot
-			if len(eventParts) > 0 {
-				line = fmt.Sprintf("%s  %s", timeStr, strings.Join(eventParts, " "))
+			// Build the line with proper column spacing
+			currentPos := len(timeStr) + 2
+			columnWidth := maxLen + 2 // Add some padding between columns
+			for col := 0; col <= maxColumn; col++ {
+				if eventStr, exists := columnEvents[col]; exists {
+					// Calculate where this column should start
+					targetPos := len(timeStr) + 2 + (col * columnWidth)
+					// Add padding to reach the target position
+					if targetPos > currentPos {
+						line += strings.Repeat(" ", targetPos-currentPos)
+						currentPos = targetPos
+					}
+					line += eventStr
+					currentPos += len(eventStr)
+				}
 			}
 		}
 
@@ -196,10 +224,27 @@ func (m *Model) buildSimpleEventLayout(slotsPerDay int) (map[int][]remind.Event,
 	// Track which columns are busy at each time slot
 	columnBusy := make(map[int][]string) // slot -> list of event IDs occupying columns
 
+	// Deduplicate events before processing
+	seen := make(map[string]bool)
+	var uniqueEvents []remind.Event
+
 	for _, event := range m.events {
+		// Use just the event ID which should be unique
+		key := event.ID
+
+		if !seen[key] {
+			seen[key] = true
+			uniqueEvents = append(uniqueEvents, event)
+		}
+	}
+
+	for _, event := range uniqueEvents {
 		if event.Time != nil {
 			// Calculate day offset from base date
-			dayDiff := int(event.Date.Sub(m.selectedDate).Hours() / 24)
+			// Use calendar days, not 24-hour periods to avoid timezone issues
+			baseDate := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), m.selectedDate.Day(), 0, 0, 0, 0, m.selectedDate.Location())
+			eventDate := time.Date(event.Date.Year(), event.Date.Month(), event.Date.Day(), 0, 0, 0, 0, event.Date.Location())
+			dayDiff := int(eventDate.Sub(baseDate).Hours() / 24)
 
 			hour := event.Time.Hour()
 			minute := event.Time.Minute()
@@ -266,7 +311,17 @@ func (m *Model) buildSimpleEventLayout(slotsPerDay int) (map[int][]remind.Event,
 			}
 
 			// Add event to its starting slot only
-			eventsBySlot[globalSlot] = append(eventsBySlot[globalSlot], event)
+			// Check if this event is already in this slot (shouldn't happen)
+			alreadyInSlot := false
+			for _, existing := range eventsBySlot[globalSlot] {
+				if existing.ID == event.ID {
+					alreadyInSlot = true
+					break
+				}
+			}
+			if !alreadyInSlot {
+				eventsBySlot[globalSlot] = append(eventsBySlot[globalSlot], event)
+			}
 		}
 	}
 
@@ -379,8 +434,8 @@ func (m *Model) renderUntimedList() string {
 	return m.styles.Border.Render(content)
 }
 
-// renderEventDescription renders the selected event details
-func (m *Model) renderEventDescription() string {
+// renderSelectedSlotEvents renders all events for the selected time slot
+func (m *Model) renderSelectedSlotEvents() string {
 	// Find event at selected slot
 	slotsPerDay := 24
 	if m.timeIncrement == 30 {
@@ -431,28 +486,77 @@ func (m *Model) renderEventDescription() string {
 		}
 	}
 
-	// Build description
-	if len(selectedEvents) == 0 {
-		return m.styles.Help.Render("(no reminder selected)")
-	}
+	var lines []string
 
-	event := selectedEvents[0]
-	desc := fmt.Sprintf("%s at %02d:%02d",
-		selectedDate.Format("Monday, January 2, 2006"),
+	// Header with selected time
+	timeHeader := fmt.Sprintf("Selected: %s at %02d:%02d",
+		selectedDate.Format("Mon Jan 2, 2006"),
 		hour, minute)
+	lines = append(lines, m.styles.Header.Render(timeHeader))
 
-	if event.Duration != nil {
-		desc += fmt.Sprintf(" (Duration: %v)", *event.Duration)
-	}
+	// Show all events for this slot
+	if len(selectedEvents) == 0 {
+		lines = append(lines, "")
+		lines = append(lines, m.styles.Help.Render("(no reminders at this time)"))
+	} else {
+		lines = append(lines, "")
+		for i, event := range selectedEvents {
+			if i > 0 {
+				lines = append(lines, "") // Separator between events
+			}
 
-	desc += "\n" + event.Description
+			// Event time and duration
+			eventTime := fmt.Sprintf("%02d:%02d", event.Time.Hour(), event.Time.Minute())
+			if event.Duration != nil {
+				eventTime += fmt.Sprintf(" (%v)", *event.Duration)
+			}
+			lines = append(lines, m.styles.Event.Render(eventTime))
 
-	if len(event.Tags) > 0 {
-		desc += "\nTags: " + strings.Join(event.Tags, ", ")
+			// Event description
+			desc := event.Description
+			if m.showEventIDs {
+				// Show ID for debugging
+				lines = append(lines, m.styles.Help.Render(fmt.Sprintf("ID: %s", event.ID)))
+			}
+			// Wrap long descriptions
+			maxWidth := 30
+			if len(desc) > maxWidth {
+				for len(desc) > maxWidth {
+					lines = append(lines, desc[:maxWidth])
+					desc = desc[maxWidth:]
+				}
+				if len(desc) > 0 {
+					lines = append(lines, desc)
+				}
+			} else {
+				lines = append(lines, desc)
+			}
+
+			// Tags if any
+			if len(event.Tags) > 0 {
+				tagStr := "Tags: " + strings.Join(event.Tags, ", ")
+				lines = append(lines, m.styles.Help.Render(tagStr))
+			}
+
+			// Priority indicator
+			if event.Priority > remind.PriorityNone {
+				priorityStr := "Priority: "
+				switch event.Priority {
+				case remind.PriorityLow:
+					priorityStr += "!"
+				case remind.PriorityMedium:
+					priorityStr += "!!"
+				case remind.PriorityHigh:
+					priorityStr += "!!!"
+				}
+				lines = append(lines, m.styles.Priority.Render(priorityStr))
+			}
+		}
 	}
 
 	// Add border
-	return m.styles.Border.Render(desc)
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	return m.styles.Border.Render(content)
 }
 
 // renderScheduleStatusBar renders the status bar for schedule view
@@ -461,7 +565,7 @@ func (m *Model) renderScheduleStatusBar() string {
 
 	left := fmt.Sprintf(" Currently: %s", dateStr)
 
-	right := "j/k:slot  H/L:day  J/K:week  z:zoom  o:today  n:new  ?:help  q:quit"
+	right := "j/k:slot  H/L:day  J/K:week  z:zoom  o:today  i:IDs  n:new  ?:help  q:quit"
 
 	if m.message != "" {
 		right = m.styles.Message.Render(m.message)

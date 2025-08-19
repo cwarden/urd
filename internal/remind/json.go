@@ -52,7 +52,6 @@ func ConvertJSONToEvents(entries []RemindEntry, timezone *time.Location) []Event
 	var events []Event
 
 	for _, entry := range entries {
-
 		// Parse date in local timezone
 		date, err := time.ParseInLocation("2006-01-02", entry.Date, timezone)
 		if err != nil {

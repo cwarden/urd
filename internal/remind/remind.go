@@ -33,9 +33,30 @@ func (c *Client) GetEvents(start, end time.Time) ([]Event, error) {
 		return nil, fmt.Errorf("no remind files configured")
 	}
 
-	var allEvents []Event
+	// Simply call getEventsForMonth for a single month if the date range is within one month
+	// This avoids duplicates from calling remind multiple times
+	if start.Month() == end.Month() && start.Year() == end.Year() {
+		// Single month request
+		monthStart := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, start.Location())
+		events, err := c.getEventsForMonth(monthStart)
+		if err != nil {
+			return nil, err
+		}
 
-	// Get events month by month.
+		// Filter to date range
+		var filtered []Event
+		for _, event := range events {
+			if !event.Date.Before(start) && !event.Date.After(end) {
+				filtered = append(filtered, event)
+			}
+		}
+		return filtered, nil
+	}
+
+	// Use a map to deduplicate events for multi-month spans
+	eventMap := make(map[string]Event)
+
+	// Get events month by month
 	// Start from the first day of the month containing 'start'
 	currentMonth := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, start.Location())
 
@@ -45,10 +66,14 @@ func (c *Client) GetEvents(start, end time.Time) ([]Event, error) {
 			return nil, fmt.Errorf("failed to get events for %s: %w", currentMonth.Format("Jan 2006"), err)
 		}
 
-		// Filter events to the requested date range
+		// Filter events to the requested date range and deduplicate
 		for _, event := range events {
 			if !event.Date.Before(start) && !event.Date.After(end) {
-				allEvents = append(allEvents, event)
+				// Use the event ID as the deduplication key
+				// The ID already includes date and line number which makes it unique
+				if _, exists := eventMap[event.ID]; !exists {
+					eventMap[event.ID] = event
+				}
 			}
 		}
 
@@ -59,6 +84,12 @@ func (c *Client) GetEvents(start, end time.Time) ([]Event, error) {
 		if currentMonth.After(end.AddDate(0, 12, 0)) {
 			break
 		}
+	}
+
+	// Convert map back to slice
+	var allEvents []Event
+	for _, event := range eventMap {
+		allEvents = append(allEvents, event)
 	}
 
 	return allEvents, nil
@@ -158,34 +189,28 @@ func (c *Client) parseRemindOutput(output string) ([]Event, error) {
 		event.Date = date
 		event.Type = EventNote
 
-		// Check if it's a timed event
-		if parts[0] != "*" {
-			// Has duration and/or time
-			idx := 1
-			if parts[0] != "*" && len(parts) > idx {
-				// Duration in minutes (skip for now)
-				idx++
-			}
+		// Parse remind -s format: duration start_time time_str description
+		// * * means untimed, * 540 means timed
+		idx := 0
 
-			if idx < len(parts) && parts[idx] != "*" {
-				// Start time in minutes from midnight (skip)
-				idx++
-			}
+		if parts[idx] == "*" {
+			idx++
+			if idx < len(parts) && parts[idx] == "*" {
+				// Untimed event - rest is description
+				event.Description = strings.Join(parts[idx+1:], " ")
+				event.Type = EventNote
+			} else if idx < len(parts) {
+				// Timed event - next is start time in minutes
+				idx++ // Skip start time
 
-			// Look for time range (HH:MM-HH:MM or HH:MM)
-			if idx < len(parts) {
-				timeStr := parts[idx]
-				if strings.Contains(timeStr, ":") {
-					// Parse time
-					timeParts := strings.Split(timeStr, "-")
-					if len(timeParts) > 0 {
-						t, err := time.Parse("15:04", timeParts[0])
-						if err == nil {
-							eventTime := time.Date(date.Year(), date.Month(), date.Day(),
-								t.Hour(), t.Minute(), 0, 0, c.Timezone)
-							event.Time = &eventTime
-							event.Type = EventReminder
-						}
+				// Look for time string
+				if idx < len(parts) && strings.Contains(parts[idx], ":") {
+					t, err := time.Parse("15:04", parts[idx])
+					if err == nil {
+						eventTime := time.Date(date.Year(), date.Month(), date.Day(),
+							t.Hour(), t.Minute(), 0, 0, c.Timezone)
+						event.Time = &eventTime
+						event.Type = EventReminder
 					}
 					idx++
 				}
@@ -196,9 +221,25 @@ func (c *Client) parseRemindOutput(output string) ([]Event, error) {
 				}
 			}
 		} else {
-			// Untimed event - everything after the stars is description
-			if len(parts) > 1 && parts[1] == "*" {
-				event.Description = strings.Join(parts[2:], " ")
+			// Has duration - skip it
+			idx++
+			if idx < len(parts) {
+				// Skip start time
+				idx++
+			}
+			if idx < len(parts) && strings.Contains(parts[idx], ":") {
+				t, err := time.Parse("15:04", parts[idx])
+				if err == nil {
+					eventTime := time.Date(date.Year(), date.Month(), date.Day(),
+						t.Hour(), t.Minute(), 0, 0, c.Timezone)
+					event.Time = &eventTime
+					event.Type = EventReminder
+				}
+				idx++
+			}
+			// Rest is description
+			if idx < len(parts) {
+				event.Description = strings.Join(parts[idx:], " ")
 			}
 		}
 

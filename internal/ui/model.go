@@ -48,6 +48,7 @@ type Model struct {
 	helpVisible  bool
 	message      string
 	messageTimer *time.Timer
+	showEventIDs bool
 
 	// Editor state
 	editingEvent *remind.Event
@@ -226,6 +227,16 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			currentTimeSlot = now.Hour()*4 + now.Minute()/15
 		}
 		m.showMessage(fmt.Sprintf("Refreshed - Now: %02d:%02d, slot=%d, selected=%d", now.Hour(), now.Minute(), currentTimeSlot, m.selectedSlot))
+		return m, nil
+
+	case "i", "I":
+		// Toggle showing event IDs
+		m.showEventIDs = !m.showEventIDs
+		if m.showEventIDs {
+			m.showMessage("Showing event IDs")
+		} else {
+			m.showMessage("Hiding event IDs")
+		}
 		return m, nil
 
 	}

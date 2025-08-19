@@ -16,17 +16,17 @@ func TestParseRemindOutput(t *testing.T) {
 	}{
 		{
 			name: "timed and untimed events",
-			output: `2024/03/15 09:00 Morning standup
-2024/03/15 * All day event
-2024/03/15 14:30 Team meeting
-2024/03/16 * Weekend task`,
+			output: `2024/03/15 * * * 540 09:00 Morning standup
+2024/03/15 * * * * All day event
+2024/03/15 * * * 870 14:30 Team meeting
+2024/03/16 * * * * Weekend task`,
 			expected: 4,
 		},
 		{
 			name: "events with priorities",
-			output: `2024/03/15 10:00 Regular meeting
-2024/03/15 14:00 Important deadline!!
-2024/03/15 16:00 Critical issue!!!`,
+			output: `2024/03/15 * * * 600 10:00 Regular meeting
+2024/03/15 * * * 840 14:00 Important deadline!!
+2024/03/15 * * * 960 16:00 Critical issue!!!`,
 			expected: 3,
 		},
 		{
@@ -36,8 +36,8 @@ func TestParseRemindOutput(t *testing.T) {
 		},
 		{
 			name: "events with tags",
-			output: `2024/03/15 09:00 Review PR @work @code
-2024/03/15 11:00 Doctor appointment @personal @health`,
+			output: `2024/03/15 * * * 540 09:00 Review PR @work @code
+2024/03/15 * * * 660 11:00 Doctor appointment @personal @health`,
 			expected: 2,
 		},
 	}
@@ -131,10 +131,10 @@ func TestParseEventDetails(t *testing.T) {
 func TestParseDifferentDateFormats(t *testing.T) {
 	client := NewClient()
 
-	output := `2024/03/15 09:00 Morning meeting
-2024/03/15 * All day conference
-2024/03/16 14:30 Afternoon workshop
-2024/03/17 * Weekend project`
+	output := `2024/03/15 * * * 540 09:00 Morning meeting
+2024/03/15 * * * * All day conference
+2024/03/16 * * * 870 14:30 Afternoon workshop
+2024/03/17 * * * * Weekend project`
 
 	events, err := client.parseRemindOutput(output)
 	if err != nil {
