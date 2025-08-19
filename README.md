@@ -5,8 +5,9 @@ A terminal calendar application inspired by wyrd, providing a TUI frontend for t
 ## Features
 
 - **Terminal-based Calendar Interface**: Navigate calendar with vim-style keybindings
+- **Hourly Schedule View**: Display events in hourly/30-minute/15-minute time slots
 - **Natural Language Event Entry**: Add events using phrases like "tomorrow 2pm meeting"
-- **Multiple Views**: Calendar grid, timed reminders, untimed reminders
+- **Multiple Views**: Calendar grid, hourly schedule, timed reminders, untimed reminders
 - **Live File Watching**: Auto-refresh when remind files change
 - **Customizable**: Extensive configuration via urdrc file
 - **Priority Support**: Mark events with priority levels (!, !!, !!!)
@@ -53,12 +54,12 @@ urd --version
 ## Keyboard Shortcuts
 
 ### Navigation
-- `j`/`↓` - Next day
-- `k`/`↑` - Previous day
-- `h`/`←` - Previous week
-- `l`/`→` - Next week
-- `J` - Jump next week
-- `K` - Jump previous week
+- `l`/`→` - Next day (move right)
+- `h`/`←` - Previous day (move left)
+- `j`/`↓` - Next week (move down)
+- `k`/`↑` - Previous week (move up)
+- `J` - Jump to next week
+- `K` - Jump to previous week
 - `>` - Next month
 - `<` - Previous month
 - `t` - Today
@@ -71,8 +72,15 @@ urd --version
 
 ### Views
 - `1` - Calendar view
-- `2` - Timed reminders
-- `3` - Untimed reminders
+- `2` - Hourly schedule
+- `3` - Timed reminders
+- `4` - Untimed reminders
+
+### Hourly View Controls
+- `z` - Zoom (cycle between 1 hour, 30 minute, and 15 minute time slots)
+- `j`/`k` - Navigate between time slots
+- `h`/`l` - Navigate between days
+- `n` - Create event at selected time slot
 
 ## Configuration
 
@@ -102,8 +110,10 @@ set refresh_rate 30
 set confirm_delete true
 
 # Key bindings
-bind j next_day
-bind k prev_day
+bind l next_day
+bind h prev_day
+bind j next_week
+bind k prev_week
 bind n new_event
 
 # Colors

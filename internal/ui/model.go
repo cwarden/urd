@@ -16,6 +16,7 @@ type ViewMode int
 
 const (
 	ViewCalendar ViewMode = iota
+	ViewHourly
 	ViewTimedReminders
 	ViewUntimedReminders
 	ViewHelp
@@ -34,6 +35,12 @@ type Model struct {
 	currentDate  time.Time
 	selectedDate time.Time
 	events       []remind.Event
+
+	// Hourly view state
+	hourlyDate    time.Time
+	selectedSlot  int // Selected time slot index (can span multiple days)
+	timeIncrement int // Minutes per slot (15, 30, or 60)
+	topSlot       int // First visible slot in the schedule
 
 	// UI state
 	width        int
@@ -68,14 +75,18 @@ func NewModel(cfg *config.Config, client *remind.Client) *Model {
 	now := time.Now()
 
 	m := &Model{
-		config:       cfg,
-		client:       client,
-		parser:       parser.NewTimeParser(),
-		mode:         ViewCalendar,
-		currentDate:  now,
-		selectedDate: now,
-		events:       []remind.Event{},
-		styles:       DefaultStyles(),
+		config:        cfg,
+		client:        client,
+		parser:        parser.NewTimeParser(),
+		mode:          ViewHourly,
+		currentDate:   now,
+		selectedDate:  now,
+		events:        []remind.Event{},
+		hourlyDate:    now,
+		selectedSlot:  now.Hour()*2 + now.Minute()/30, // Default 30-min slots
+		timeIncrement: 30,                             // Default to 30-minute slots
+		topSlot:       0,
+		styles:        DefaultStyles(),
 	}
 
 	// Load initial events
@@ -175,6 +186,8 @@ func (m *Model) View() string {
 	switch m.mode {
 	case ViewCalendar:
 		return m.viewCalendar()
+	case ViewHourly:
+		return m.viewHourlySchedule()
 	case ViewTimedReminders:
 		return m.viewTimedReminders()
 	case ViewUntimedReminders:
@@ -219,8 +232,161 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch m.mode {
 	case ViewCalendar:
 		return m.handleCalendarKeys(msg)
+	case ViewHourly:
+		return m.handleHourlyKeys(msg)
 	case ViewEventEditor:
 		return m.handleEditorKeys(msg)
+	}
+
+	return m, nil
+}
+
+func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Calculate slots per day based on increment
+	slotsPerDay := 24
+	if m.timeIncrement == 30 {
+		slotsPerDay = 48
+	} else if m.timeIncrement == 15 {
+		slotsPerDay = 96
+	}
+
+	visibleSlots := m.height - 6
+	if visibleSlots < 10 {
+		visibleSlots = 10
+	}
+
+	switch msg.String() {
+	case "j", "down":
+		// Move down = next time slot (can roll to next day)
+		m.selectedSlot++
+		// Scroll if needed
+		if m.selectedSlot >= m.topSlot+visibleSlots-1 {
+			m.topSlot++
+		}
+
+	case "k", "up":
+		// Move up = previous time slot (can roll to previous day)
+		m.selectedSlot--
+		// Scroll if needed
+		if m.selectedSlot < m.topSlot+1 {
+			m.topSlot--
+		}
+
+	case "l", "right":
+		// Next day - jump forward by one day worth of slots
+		m.selectedSlot += slotsPerDay
+		m.topSlot += slotsPerDay
+		m.hourlyDate = m.hourlyDate.AddDate(0, 0, 1)
+
+	case "h", "left":
+		// Previous day - jump back by one day worth of slots
+		m.selectedSlot -= slotsPerDay
+		m.topSlot -= slotsPerDay
+		m.hourlyDate = m.hourlyDate.AddDate(0, 0, -1)
+
+	case "t":
+		// Today - reset to current time
+		now := time.Now()
+		m.hourlyDate = now
+		currentSlot := now.Hour()
+		if m.timeIncrement == 30 {
+			currentSlot = now.Hour()*2 + now.Minute()/30
+		} else if m.timeIncrement == 15 {
+			currentSlot = now.Hour()*4 + now.Minute()/15
+		}
+		m.selectedSlot = currentSlot
+		m.topSlot = currentSlot - visibleSlots/2
+		if m.topSlot < 0 {
+			m.topSlot = 0
+		}
+
+	case "z":
+		// Zoom - cycle through time increments
+		// Convert current slot to time
+		dayOffset := m.selectedSlot / slotsPerDay
+		localSlot := m.selectedSlot % slotsPerDay
+		if m.selectedSlot < 0 {
+			dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			localSlot = slotsPerDay + (m.selectedSlot % slotsPerDay)
+			if localSlot == slotsPerDay {
+				localSlot = 0
+				dayOffset++
+			}
+		}
+
+		hour := localSlot
+		minute := 0
+		if m.timeIncrement == 30 {
+			hour = localSlot / 2
+			minute = (localSlot % 2) * 30
+		} else if m.timeIncrement == 15 {
+			hour = localSlot / 4
+			minute = (localSlot % 4) * 15
+		}
+
+		// Change increment
+		oldIncrement := m.timeIncrement
+		switch m.timeIncrement {
+		case 60:
+			m.timeIncrement = 30
+		case 30:
+			m.timeIncrement = 15
+		case 15:
+			m.timeIncrement = 60
+		}
+
+		// Recalculate slot position with new increment
+		newSlotsPerDay := 24
+		if m.timeIncrement == 30 {
+			newSlotsPerDay = 48
+			localSlot = hour*2 + minute/30
+		} else if m.timeIncrement == 15 {
+			newSlotsPerDay = 96
+			localSlot = hour*4 + minute/15
+		} else {
+			newSlotsPerDay = 24
+			localSlot = hour
+		}
+
+		m.selectedSlot = dayOffset*newSlotsPerDay + localSlot
+
+		// Adjust top slot proportionally
+		m.topSlot = m.topSlot * newSlotsPerDay / (24 * oldIncrement / 60)
+
+	case "n":
+		// New event at selected time
+		m.mode = ViewEventEditor
+		m.editingEvent = nil
+
+		// Calculate time from selected slot
+		dayOffset := m.selectedSlot / slotsPerDay
+		localSlot := m.selectedSlot % slotsPerDay
+		if m.selectedSlot < 0 {
+			dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			localSlot = slotsPerDay + (m.selectedSlot % slotsPerDay)
+			if localSlot == slotsPerDay {
+				localSlot = 0
+				dayOffset++
+			}
+		}
+
+		selectedDate := m.hourlyDate.AddDate(0, 0, dayOffset)
+		hour := localSlot
+		minute := 0
+		if m.timeIncrement == 30 {
+			hour = localSlot / 2
+			minute = (localSlot % 2) * 30
+		} else if m.timeIncrement == 15 {
+			hour = localSlot / 4
+			minute = (localSlot % 4) * 15
+		}
+
+		timeStr := fmt.Sprintf("%02d:%02d", hour, minute)
+		m.inputBuffer = fmt.Sprintf("%s %s ", selectedDate.Format("2006-01-02"), timeStr)
+		m.cursorPos = len(m.inputBuffer)
+
+	case "1":
+		m.mode = ViewCalendar
 	}
 
 	return m, nil
@@ -270,9 +436,23 @@ func (m *Model) handleCalendarKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.mode = ViewCalendar
 
 	case "2":
-		m.mode = ViewTimedReminders
+		m.mode = ViewHourly
+		m.hourlyDate = m.selectedDate
+		now := time.Now()
+		// Calculate current slot based on time increment
+		currentSlot := now.Hour()
+		if m.timeIncrement == 30 {
+			currentSlot = now.Hour()*2 + now.Minute()/30
+		} else if m.timeIncrement == 15 {
+			currentSlot = now.Hour()*4 + now.Minute()/15
+		}
+		m.selectedSlot = currentSlot
+		m.topSlot = 0
 
 	case "3":
+		m.mode = ViewTimedReminders
+
+	case "4":
 		m.mode = ViewUntimedReminders
 	}
 
