@@ -2,6 +2,9 @@ package ui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
+	"strings"
 	"time"
 
 	"urd/internal/config"
@@ -172,6 +175,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case messageTimeoutMsg:
 		m.message = ""
+		return m, nil
+
+	case editorFinishedMsg:
+		if msg.err != nil {
+			m.showMessage(fmt.Sprintf("Editor failed: %v", msg.err))
+		} else {
+			m.showMessage("Editor session completed")
+		}
+		// Reload events after editing
+		m.loadEvents()
 		return m, nil
 	}
 
@@ -421,6 +434,36 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inputBuffer = fmt.Sprintf("%s %s ", selectedDate.Format("2006-01-02"), timeStr)
 		m.cursorPos = len(m.inputBuffer)
 
+	case "e", "E":
+		// Edit event at selected time slot
+		event := m.getEventAtSlot(m.selectedSlot)
+		if event != nil {
+			// Find which file contains this event
+			file, err := m.findEventFile(*event)
+			if err != nil {
+				m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
+			} else {
+				m.showMessage("Launching editor...")
+				return m, tea.Sequence(
+					tea.ExitAltScreen,
+					m.editCmd(m.config.EditOldCommand, file, event.LineNumber),
+					tea.EnterAltScreen,
+				)
+			}
+		} else {
+			// No event at this slot - edit file for new event
+			if len(m.config.RemindFiles) > 0 {
+				m.showMessage("Launching editor for new event...")
+				return m, tea.Sequence(
+					tea.ExitAltScreen,
+					m.editCmd(m.config.EditNewCommand, m.config.RemindFiles[0], 0),
+					tea.EnterAltScreen,
+				)
+			} else {
+				m.showMessage("No remind files configured")
+			}
+		}
+
 	case "1":
 		m.mode = ViewCalendar
 		m.currentDate = m.selectedDate
@@ -594,6 +637,76 @@ func (m *Model) needsEventReload() bool {
 	return false
 }
 
+func (m *Model) getEventAtSlot(slot int) *remind.Event {
+	// Calculate slots per day based on increment
+	slotsPerDay := 24
+	if m.timeIncrement == 30 {
+		slotsPerDay = 48
+	} else if m.timeIncrement == 15 {
+		slotsPerDay = 96
+	}
+
+	// Calculate day offset and local slot
+	dayOffset := slot / slotsPerDay
+	localSlot := slot % slotsPerDay
+	if slot < 0 {
+		dayOffset = -1 + (slot+1)/slotsPerDay
+		localSlot = slotsPerDay + (slot % slotsPerDay)
+		if localSlot == slotsPerDay {
+			localSlot = 0
+			dayOffset++
+		}
+	}
+
+	// Calculate the target date
+	targetDate := m.selectedDate.AddDate(0, 0, dayOffset)
+
+	// Find an event at this time slot
+	for _, event := range m.events {
+		// Check if event is on the target date
+		if event.Date.Year() != targetDate.Year() ||
+			event.Date.Month() != targetDate.Month() ||
+			event.Date.Day() != targetDate.Day() {
+			continue
+		}
+
+		// For timed events, check if it matches the time slot
+		if event.Time != nil {
+			eventHour := event.Time.Hour()
+			eventMinute := event.Time.Minute()
+
+			// Calculate which slot this event should be in
+			eventSlot := eventHour
+			if m.timeIncrement == 30 {
+				eventSlot = eventHour*2 + eventMinute/30
+			} else if m.timeIncrement == 15 {
+				eventSlot = eventHour*4 + eventMinute/15
+			}
+
+			if eventSlot == localSlot {
+				return &event
+			}
+		} else {
+			// For untimed events, return the first one on this day
+			return &event
+		}
+	}
+
+	return nil
+}
+
+// findEventFile attempts to locate which remind file contains the given event
+func (m *Model) findEventFile(event remind.Event) (string, error) {
+	if len(m.config.RemindFiles) == 0 {
+		return "", fmt.Errorf("no remind files configured")
+	}
+
+	// For now, use the first file as default
+	// In a more sophisticated implementation, we could parse the event ID
+	// or search through files to find the exact match
+	return m.config.RemindFiles[0], nil
+}
+
 func (m *Model) showMessage(msg string) {
 	m.message = msg
 	if m.messageTimer != nil {
@@ -610,9 +723,88 @@ func (m *Model) tickCmd() tea.Cmd {
 	})
 }
 
+// editCmd launches an external editor and returns a command that will send a message when complete
+func (m *Model) editCmd(command, filePath string, lineNumber int) tea.Cmd {
+	return func() tea.Msg {
+		// Expand variables in the command
+		expandedCommand := m.expandCommandVariables(command, filePath, lineNumber)
+
+		// Parse the command into program and arguments
+		parts, err := m.parseCommand(expandedCommand)
+		if err != nil {
+			return editorFinishedMsg{err: fmt.Errorf("failed to parse edit command: %w", err)}
+		}
+
+		if len(parts) == 0 {
+			return editorFinishedMsg{err: fmt.Errorf("empty edit command")}
+		}
+
+		// Create and run the command
+		cmd := exec.Command(parts[0], parts[1:]...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		err = cmd.Run()
+		return editorFinishedMsg{err: err}
+	}
+}
+
+// expandCommandVariables replaces template variables in the command string
+func (m *Model) expandCommandVariables(command, filePath string, lineNumber int) string {
+	result := command
+	result = strings.ReplaceAll(result, "%file%", filePath)
+	if lineNumber > 0 {
+		result = strings.ReplaceAll(result, "%line%", fmt.Sprintf("%d", lineNumber))
+	} else {
+		// For new events, go to end of file
+		result = strings.ReplaceAll(result, "%line%", "999999")
+	}
+	return result
+}
+
+// parseCommand splits a command string into program and arguments
+// Handles quoted arguments properly
+func (m *Model) parseCommand(command string) ([]string, error) {
+	var parts []string
+	var current string
+	var inQuotes bool
+	var quoteChar rune
+
+	for _, r := range command {
+		switch {
+		case !inQuotes && (r == '"' || r == '\''):
+			inQuotes = true
+			quoteChar = r
+		case inQuotes && r == quoteChar:
+			inQuotes = false
+		case !inQuotes && r == ' ':
+			if current != "" {
+				parts = append(parts, current)
+				current = ""
+			}
+		default:
+			current += string(r)
+		}
+	}
+
+	if current != "" {
+		parts = append(parts, current)
+	}
+
+	if inQuotes {
+		return nil, fmt.Errorf("unclosed quote in command: %s", command)
+	}
+
+	return parts, nil
+}
+
 // Message types
 type tickMsg struct{}
 type messageTimeoutMsg struct{}
 type eventLoadedMsg struct {
 	events []remind.Event
+}
+type editorFinishedMsg struct {
+	err error
 }

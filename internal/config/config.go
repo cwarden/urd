@@ -39,6 +39,11 @@ type Config struct {
 	QuickTemplate  string
 	TimedTemplate  string
 	AllDayTemplate string
+
+	// Editor commands
+	EditOldCommand string // Edit existing reminder at specific line
+	EditNewCommand string // Edit file for new reminder (go to end)
+	EditAnyCommand string // Edit file without specific position
 }
 
 func DefaultConfig() *Config {
@@ -91,6 +96,11 @@ func DefaultConfig() *Config {
 		QuickTemplate:  "REM %s MSG %s",
 		TimedTemplate:  "REM %s AT %s MSG %s",
 		AllDayTemplate: "REM %s MSG %s",
+
+		// Default editor commands - use vim with line numbers
+		EditOldCommand: "vim +%line% %file%",
+		EditNewCommand: "vim +999999 %file%",
+		EditAnyCommand: "vim %file%",
 	}
 }
 
@@ -277,9 +287,12 @@ func (c *Config) setVariable(name, value string) error {
 
 	case "allday_template":
 		c.AllDayTemplate = value
-
-	case "edit_old_command", "edit_new_command", "edit_any_command":
-		// TODO: Implement editing commands
+	case "edit_old_command":
+		c.EditOldCommand = value
+	case "edit_new_command":
+		c.EditNewCommand = value
+	case "edit_any_command":
+		c.EditAnyCommand = value
 
 	case "untimed_template", "timed_bold", "untimed_bold", "description_first", "schedule_12_hour", "busy_algorithm", "goto_big_endian", "untimed_duration", "status_12_hour", "center_cursor":
 		// TODO: Implement additional display options

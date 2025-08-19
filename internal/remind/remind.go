@@ -340,3 +340,122 @@ func (c *Client) TestConnection() error {
 	}
 	return nil
 }
+
+// EditEvent opens the remind file for editing at a specific line number
+func (c *Client) EditEvent(event Event, editCommand string) error {
+	if editCommand == "" {
+		return fmt.Errorf("no edit command specified")
+	}
+
+	// Find which file contains this event
+	file, err := c.findEventFile(event)
+	if err != nil {
+		return fmt.Errorf("failed to find event file: %w", err)
+	}
+
+	return c.executeEditCommand(editCommand, file, event.LineNumber)
+}
+
+// EditFile opens a remind file for editing (for new events)
+func (c *Client) EditFile(filePath string, editCommand string) error {
+	if editCommand == "" {
+		return fmt.Errorf("no edit command specified")
+	}
+
+	return c.executeEditCommand(editCommand, filePath, 0)
+}
+
+// findEventFile attempts to locate which remind file contains the given event
+func (c *Client) findEventFile(event Event) (string, error) {
+	if len(c.Files) == 0 {
+		return "", fmt.Errorf("no remind files configured")
+	}
+
+	// For now, use the first file as default
+	// In a more sophisticated implementation, we could parse the event ID
+	// or search through files to find the exact match
+	return c.Files[0], nil
+}
+
+// executeEditCommand runs the editor command with proper variable substitution
+func (c *Client) executeEditCommand(command, filePath string, lineNumber int) error {
+	// Expand variables in the command
+	expandedCommand := c.expandCommandVariables(command, filePath, lineNumber)
+
+	// Parse the command into program and arguments
+	parts, err := c.parseCommand(expandedCommand)
+	if err != nil {
+		return fmt.Errorf("failed to parse edit command: %w", err)
+	}
+
+	if len(parts) == 0 {
+		return fmt.Errorf("empty edit command")
+	}
+
+	// Execute the editor
+	cmd := exec.Command(parts[0], parts[1:]...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Run the editor and wait for it to complete
+	err = cmd.Run()
+
+	// Give the terminal a moment to settle after editor exit
+	// This helps with screen redraw issues
+	if err == nil {
+		// Send a clear screen sequence to help with redraw
+		fmt.Print("\033[2J\033[H")
+	}
+
+	return err
+}
+
+// expandCommandVariables replaces template variables in the command string
+func (c *Client) expandCommandVariables(command, filePath string, lineNumber int) string {
+	result := command
+	result = strings.ReplaceAll(result, "%file%", filePath)
+	if lineNumber > 0 {
+		result = strings.ReplaceAll(result, "%line%", fmt.Sprintf("%d", lineNumber))
+	} else {
+		// For new events, go to end of file
+		result = strings.ReplaceAll(result, "%line%", "999999")
+	}
+	return result
+}
+
+// parseCommand splits a command string into program and arguments
+// Handles quoted arguments properly
+func (c *Client) parseCommand(command string) ([]string, error) {
+	var parts []string
+	var current string
+	var inQuotes bool
+	var quoteChar rune
+
+	for _, r := range command {
+		switch {
+		case !inQuotes && (r == '"' || r == '\''):
+			inQuotes = true
+			quoteChar = r
+		case inQuotes && r == quoteChar:
+			inQuotes = false
+		case !inQuotes && r == ' ':
+			if current != "" {
+				parts = append(parts, current)
+				current = ""
+			}
+		default:
+			current += string(r)
+		}
+	}
+
+	if current != "" {
+		parts = append(parts, current)
+	}
+
+	if inQuotes {
+		return nil, fmt.Errorf("unclosed quote in command: %s", command)
+	}
+
+	return parts, nil
+}
