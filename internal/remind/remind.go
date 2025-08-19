@@ -34,100 +34,144 @@ func (c *Client) GetEvents(start, end time.Time) ([]Event, error) {
 	}
 
 	args := []string{
-		"-s",
-		"-q",
-		"-g",
-		"-b1",
-		fmt.Sprintf("-sa%s", start.Format("2006/01/02")),
-		fmt.Sprintf("-sb%s", end.Format("2006/01/02")),
+		"-pppq", // rem2ps format with preprocessing, quiet
+		"-l",    // include file and line number
+		"-g",    // sort output
+		"-b2",   // no time format in output
 	}
+
+	// Add remind files
 	args = append(args, c.Files...)
 
+	// Add date arguments (as separate args, not a single string)
+	args = append(args,
+		monthName(start.Month()),
+		fmt.Sprintf("%d", start.Day()),
+		fmt.Sprintf("%d", start.Year()))
+
 	cmd := exec.Command(c.RemindPath, args...)
-	output, err := cmd.Output()
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("remind command failed: %w", err)
+		// Check if we got JSON output despite error
+		if len(output) == 0 {
+			return nil, fmt.Errorf("remind command failed: %w", err)
+		}
 	}
 
-	return c.parseRemindOutput(string(output))
+	// Parse JSON output
+	months, parseErr := ParseRemindJSON(output)
+	if parseErr != nil {
+		// Fall back to text parsing if JSON fails
+		return c.parseRemindOutput(string(output))
+	}
+
+	// Convert JSON entries to events
+	var events []Event
+	for _, month := range months {
+		monthEvents := ConvertJSONToEvents(month.Entries, c.Timezone)
+		for _, event := range monthEvents {
+			// Filter by date range
+			if !event.Date.Before(start) && !event.Date.After(end) {
+				events = append(events, event)
+			}
+		}
+	}
+
+	return events, nil
+}
+
+func monthName(m time.Month) string {
+	return []string{
+		"", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+	}[m]
 }
 
 func (c *Client) GetEventsForDate(date time.Time) ([]Event, error) {
-	if len(c.Files) == 0 {
-		return nil, fmt.Errorf("no remind files configured")
-	}
-
-	args := []string{
-		"-s",
-		"-q",
-		"-g",
-		"-b1",
-		date.Format("02 Jan 2006"),
-	}
-	args = append(args, c.Files...)
-
-	cmd := exec.Command(c.RemindPath, args...)
-	output, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("remind command failed: %w", err)
-	}
-
-	return c.parseRemindOutput(string(output))
+	// Get events for the entire day
+	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
+	end := time.Date(date.Year(), date.Month(), date.Day(), 23, 59, 59, 999999999, date.Location())
+	return c.GetEvents(start, end)
 }
 
 func (c *Client) parseRemindOutput(output string) ([]Event, error) {
 	var events []Event
 	scanner := bufio.NewScanner(strings.NewReader(output))
 
-	// Regex patterns for parsing remind output
-	dateTimeRe := regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}) (\d{2}:\d{2}) (.+)$`)
-	dateOnlyRe := regexp.MustCompile(`^(\d{4}/\d{2}/\d{2}) \* (.+)$`)
+	// Regex for remind -s output format:
+	// date * * duration_mins start_mins time_range description
+	// or: date * * * start_mins time description (no duration)
+	// or: date * * * * description (untimed)
+	lineRe := regexp.MustCompile(`^(\d{4}/\d{2}/\d{2})\s+\*\s+\*\s+(.+)$`)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+		if line == "" || strings.Contains(line, "Unknown option") {
+			continue
+		}
+
+		matches := lineRe.FindStringSubmatch(line)
+		if matches == nil {
+			continue
+		}
+
+		date, err := time.Parse("2006/01/02", matches[1])
+		if err != nil {
+			continue
+		}
+
+		remainder := matches[2]
+		parts := strings.Fields(remainder)
+		if len(parts) < 2 {
 			continue
 		}
 
 		var event Event
+		event.Date = date
+		event.Type = EventNote
 
-		// Try to parse timed events
-		if matches := dateTimeRe.FindStringSubmatch(line); matches != nil {
-			date, err := time.Parse("2006/01/02", matches[1])
-			if err != nil {
-				continue
+		// Check if it's a timed event
+		if parts[0] != "*" {
+			// Has duration and/or time
+			idx := 1
+			if parts[0] != "*" && len(parts) > idx {
+				// Duration in minutes (skip for now)
+				idx++
 			}
 
-			timeStr := matches[2]
-			eventTime, err := time.Parse("15:04", timeStr)
-			if err != nil {
-				continue
+			if idx < len(parts) && parts[idx] != "*" {
+				// Start time in minutes from midnight (skip)
+				idx++
 			}
 
-			// Combine date and time
-			eventDateTime := time.Date(date.Year(), date.Month(), date.Day(),
-				eventTime.Hour(), eventTime.Minute(), 0, 0, c.Timezone)
+			// Look for time range (HH:MM-HH:MM or HH:MM)
+			if idx < len(parts) {
+				timeStr := parts[idx]
+				if strings.Contains(timeStr, ":") {
+					// Parse time
+					timeParts := strings.Split(timeStr, "-")
+					if len(timeParts) > 0 {
+						t, err := time.Parse("15:04", timeParts[0])
+						if err == nil {
+							eventTime := time.Date(date.Year(), date.Month(), date.Day(),
+								t.Hour(), t.Minute(), 0, 0, c.Timezone)
+							event.Time = &eventTime
+							event.Type = EventReminder
+						}
+					}
+					idx++
+				}
 
-			event = Event{
-				Date:        date,
-				Time:        &eventDateTime,
-				Description: strings.TrimSpace(matches[3]),
-				Type:        EventReminder,
-			}
-		} else if matches := dateOnlyRe.FindStringSubmatch(line); matches != nil {
-			// Parse untimed events
-			date, err := time.Parse("2006/01/02", matches[1])
-			if err != nil {
-				continue
-			}
-
-			event = Event{
-				Date:        date,
-				Description: strings.TrimSpace(matches[2]),
-				Type:        EventNote,
+				// Rest is description
+				if idx < len(parts) {
+					event.Description = strings.Join(parts[idx:], " ")
+				}
 			}
 		} else {
-			continue
+			// Untimed event - everything after the stars is description
+			if len(parts) > 1 && parts[1] == "*" {
+				event.Description = strings.Join(parts[2:], " ")
+			}
 		}
 
 		// Parse priority and tags from description
@@ -214,9 +258,15 @@ func (c *Client) AddEvent(desc, dateStr, timeStr string) error {
 }
 
 func (c *Client) TestConnection() error {
-	cmd := exec.Command(c.RemindPath, "-h")
-	err := cmd.Run()
+	// Test with a simple remind command that should always work
+	cmd := exec.Command(c.RemindPath, "-n")
+	cmd.Stdin = strings.NewReader("REM MSG test\n")
+	output, err := cmd.CombinedOutput()
 	if err != nil {
+		// Check if we at least got remind output (it may exit 1 but still work)
+		if len(output) > 0 && (strings.Contains(string(output), "No reminders") || strings.Contains(string(output), "REM")) {
+			return nil
+		}
 		return fmt.Errorf("remind command not found or not working: %w", err)
 	}
 	return nil

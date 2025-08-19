@@ -6,7 +6,7 @@ GO_FILES=$(shell find . -type f -name '*.go')
 build: $(BINARY_NAME)
 
 $(BINARY_NAME): $(GO_FILES)
-	go build -o $(BINARY_NAME) ./cmd/urd
+	go build -o $(BINARY_NAME) .
 
 clean:
 	go clean
@@ -22,7 +22,7 @@ lint:
 	go vet ./...
 
 install: build
-	go install ./cmd/urd
+	go install .
 
 dev: fmt test build
 

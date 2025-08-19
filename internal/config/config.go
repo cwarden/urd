@@ -99,7 +99,7 @@ func LoadConfig() (*Config, error) {
 
 	// Try multiple config file locations
 	configPaths := []string{
-		os.Getenv("WYRD_CONFIG"),
+		os.Getenv("URD_CONFIG"),
 		filepath.Join(os.Getenv("XDG_CONFIG_HOME"), "urd", "urdrc"),
 		filepath.Join(os.Getenv("HOME"), ".config", "urd", "urdrc"),
 		filepath.Join(os.Getenv("HOME"), ".urdrc"),
@@ -149,8 +149,13 @@ func (c *Config) loadFromFile(path string) error {
 }
 
 func (c *Config) parseLine(line string) error {
-	// Handle set commands: set variable value
-	setRe := regexp.MustCompile(`^set\s+(\w+)\s+(.+)$`)
+	// Skip comments and empty lines
+	if line == "" || strings.HasPrefix(line, "#") {
+		return nil
+	}
+
+	// Handle set commands: set variable value or set variable="value"
+	setRe := regexp.MustCompile(`^set\s+(\w+)\s*=?\s*(.+)$`)
 	if matches := setRe.FindStringSubmatch(line); matches != nil {
 		return c.setVariable(matches[1], matches[2])
 	}
@@ -177,7 +182,7 @@ func (c *Config) setVariable(name, value string) error {
 	value = strings.Trim(value, `"'`)
 
 	switch name {
-	case "remind_file", "remind_files":
+	case "remind_file", "remind_files", "reminders_file":
 		// Handle multiple files separated by commas
 		files := strings.Split(value, ",")
 		for i, file := range files {
@@ -186,6 +191,11 @@ func (c *Config) setVariable(name, value string) error {
 			if strings.HasPrefix(files[i], "~/") {
 				home, _ := os.UserHomeDir()
 				files[i] = filepath.Join(home, files[i][2:])
+			}
+			// Expand $HOME
+			if strings.HasPrefix(files[i], "$HOME/") {
+				home, _ := os.UserHomeDir()
+				files[i] = filepath.Join(home, files[i][6:])
 			}
 		}
 		c.RemindFiles = files
@@ -196,14 +206,23 @@ func (c *Config) setVariable(name, value string) error {
 	case "editor":
 		c.Editor = value
 
-	case "week_start_day":
-		switch strings.ToLower(value) {
-		case "sunday", "sun", "0":
-			c.WeekStartDay = time.Sunday
-		case "monday", "mon", "1":
-			c.WeekStartDay = time.Monday
-		default:
-			return fmt.Errorf("invalid week_start_day: %s", value)
+	case "week_start_day", "week_starts_monday":
+		if name == "week_starts_monday" {
+			// Handle boolean format
+			if strings.ToLower(value) == "true" || value == "1" {
+				c.WeekStartDay = time.Monday
+			} else {
+				c.WeekStartDay = time.Sunday
+			}
+		} else {
+			switch strings.ToLower(value) {
+			case "sunday", "sun", "0":
+				c.WeekStartDay = time.Sunday
+			case "monday", "mon", "1":
+				c.WeekStartDay = time.Monday
+			default:
+				return fmt.Errorf("invalid week_start_day: %s", value)
+			}
 		}
 
 	case "time_format":
@@ -259,8 +278,16 @@ func (c *Config) setVariable(name, value string) error {
 	case "allday_template":
 		c.AllDayTemplate = value
 
+	case "edit_old_command", "edit_new_command", "edit_any_command":
+		// TODO: Implement editing commands
+
+	case "untimed_template", "timed_bold", "untimed_bold", "description_first", "schedule_12_hour", "busy_algorithm", "goto_big_endian", "untimed_duration", "status_12_hour", "center_cursor":
+		// TODO: Implement additional display options
+
 	default:
-		return fmt.Errorf("unknown config variable: %s", name)
+		// For now, silently ignore unknown config variables to maintain compatibility
+		// TODO: Implement full config variable support
+		return nil
 	}
 
 	return nil
