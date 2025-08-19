@@ -31,13 +31,13 @@ type Model struct {
 	parser  *parser.TimeParser
 
 	// View state
-	mode         ViewMode
-	currentDate  time.Time
-	selectedDate time.Time
-	events       []remind.Event
+	mode            ViewMode
+	currentDate     time.Time
+	selectedDate    time.Time
+	events          []remind.Event
+	eventsLoadedFor time.Time // Track when we last loaded events
 
 	// Hourly view state
-	hourlyDate    time.Time
 	selectedSlot  int // Selected time slot index (can span multiple days)
 	timeIncrement int // Minutes per slot (15, 30, or 60)
 	topSlot       int // First visible slot in the schedule
@@ -82,7 +82,6 @@ func NewModel(cfg *config.Config, client *remind.Client) *Model {
 		currentDate:   now,
 		selectedDate:  now,
 		events:        []remind.Event{},
-		hourlyDate:    now,
 		selectedSlot:  now.Hour()*2 + now.Minute()/30, // Default 30-min slots
 		timeIncrement: 30,                             // Default to 30-minute slots
 		topSlot:       0,
@@ -219,13 +218,16 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "r":
 		m.loadEvents()
-		m.showMessage("Refreshed")
+		now := time.Now()
+		currentTimeSlot := now.Hour()
+		if m.timeIncrement == 30 {
+			currentTimeSlot = now.Hour()*2 + now.Minute()/30
+		} else if m.timeIncrement == 15 {
+			currentTimeSlot = now.Hour()*4 + now.Minute()/15
+		}
+		m.showMessage(fmt.Sprintf("Refreshed - Now: %02d:%02d, slot=%d, selected=%d", now.Hour(), now.Minute(), currentTimeSlot, m.selectedSlot))
 		return m, nil
 
-	case "t":
-		m.selectedDate = time.Now()
-		m.currentDate = time.Now()
-		return m, nil
 	}
 
 	// Mode-specific handling
@@ -273,44 +275,55 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "l", "right", "L":
-		// Next day - jump forward by one day worth of slots
-		m.selectedSlot += slotsPerDay
-		m.topSlot += slotsPerDay
-		m.hourlyDate = m.hourlyDate.AddDate(0, 0, 1)
+		// Next day - jump forward by one day
+		m.selectedDate = m.selectedDate.AddDate(0, 0, 1)
+		if m.needsEventReload() {
+			m.loadEventsForSchedule()
+		}
 
 	case "h", "left", "H":
-		// Previous day - jump back by one day worth of slots
-		m.selectedSlot -= slotsPerDay
-		m.topSlot -= slotsPerDay
-		m.hourlyDate = m.hourlyDate.AddDate(0, 0, -1)
-	
-	case "J":
-		// Next week - jump forward by one week worth of slots
-		m.selectedSlot += slotsPerDay * 7
-		m.topSlot += slotsPerDay * 7
-		m.hourlyDate = m.hourlyDate.AddDate(0, 0, 7)
-	
-	case "K":
-		// Previous week - jump back by one week worth of slots
-		m.selectedSlot -= slotsPerDay * 7
-		m.topSlot -= slotsPerDay * 7
-		m.hourlyDate = m.hourlyDate.AddDate(0, 0, -7)
-
-	case "t":
-		// Today - reset to current time
-		now := time.Now()
-		m.hourlyDate = now
-		currentSlot := now.Hour()
-		if m.timeIncrement == 30 {
-			currentSlot = now.Hour()*2 + now.Minute()/30
-		} else if m.timeIncrement == 15 {
-			currentSlot = now.Hour()*4 + now.Minute()/15
+		// Previous day - jump back by one day
+		m.selectedDate = m.selectedDate.AddDate(0, 0, -1)
+		if m.needsEventReload() {
+			m.loadEventsForSchedule()
 		}
-		m.selectedSlot = currentSlot
-		m.topSlot = currentSlot - visibleSlots/2
+
+	case "J":
+		// Next week - jump forward by one week
+		m.selectedDate = m.selectedDate.AddDate(0, 0, 7)
+		if m.needsEventReload() {
+			m.loadEventsForSchedule()
+		}
+
+	case "K":
+		// Previous week - jump back by one week
+		m.selectedDate = m.selectedDate.AddDate(0, 0, -7)
+		if m.needsEventReload() {
+			m.loadEventsForSchedule()
+		}
+
+	case "o":
+		// Go to current time - start fresh
+		now := time.Now()
+		m.selectedDate = now
+
+		// Calculate current time slot for today (where day 0 = today)
+		currentTimeSlot := now.Hour()
+		if m.timeIncrement == 30 {
+			currentTimeSlot = now.Hour()*2 + now.Minute()/30
+		} else if m.timeIncrement == 15 {
+			currentTimeSlot = now.Hour()*4 + now.Minute()/15
+		}
+
+		// Set slots as if today is day 0 (selectedSlot = 0 means 00:00 today)
+		m.selectedSlot = currentTimeSlot
+		m.topSlot = currentTimeSlot - visibleSlots/2
 		if m.topSlot < 0 {
 			m.topSlot = 0
 		}
+
+		// Show debug message
+		m.showMessage(fmt.Sprintf("Now: %02d:%02d, slot=%d, top=%d", now.Hour(), now.Minute(), m.selectedSlot, m.topSlot))
 
 	case "z":
 		// Zoom - cycle through time increments
@@ -382,7 +395,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		selectedDate := m.hourlyDate.AddDate(0, 0, dayOffset)
+		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
 		hour := localSlot
 		minute := 0
 		if m.timeIncrement == 30 {
@@ -399,8 +412,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "1":
 		m.mode = ViewCalendar
-		m.selectedDate = m.hourlyDate
-		m.currentDate = m.hourlyDate
+		m.currentDate = m.selectedDate
 		m.loadEvents()
 	}
 
@@ -452,7 +464,6 @@ func (m *Model) handleCalendarKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "2":
 		m.mode = ViewHourly
-		m.hourlyDate = m.selectedDate
 		now := time.Now()
 		// Calculate current slot based on time increment
 		currentSlot := now.Hour()
@@ -544,13 +555,32 @@ func (m *Model) loadEvents() {
 
 func (m *Model) loadEventsForSchedule() {
 	// Load events for a wider date range for hourly view
-	start := m.hourlyDate.AddDate(0, 0, -7)
-	end := m.hourlyDate.AddDate(0, 0, 7)
-	
+	start := m.selectedDate.AddDate(0, 0, -14) // Load 2 weeks before
+	end := m.selectedDate.AddDate(0, 0, 14)    // Load 2 weeks after
+
 	events, err := m.client.GetEvents(start, end)
 	if err == nil {
 		m.events = events
+		m.eventsLoadedFor = m.selectedDate // Track when we last loaded events
+	} else {
+		// Show error message for debugging
+		m.showMessage(fmt.Sprintf("Error loading events: %v", err))
 	}
+}
+
+// needsEventReload checks if we need to reload events based on current selected date
+func (m *Model) needsEventReload() bool {
+	if m.eventsLoadedFor.IsZero() {
+		return true // Never loaded
+	}
+
+	// Reload if we've moved more than 1 week from when we last loaded
+	daysSinceLoad := int(m.selectedDate.Sub(m.eventsLoadedFor).Hours() / 24)
+	if daysSinceLoad < -7 || daysSinceLoad > 7 {
+		return true
+	}
+
+	return false
 }
 
 func (m *Model) showMessage(msg string) {

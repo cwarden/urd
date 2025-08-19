@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-// viewHourly renders the hourly schedule view
+// viewHourlySchedule renders the hourly schedule view
 func (m *Model) viewHourlySchedule() string {
 	var sections []string
 
@@ -52,7 +52,7 @@ func (m *Model) viewHourlySchedule() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
-// renderSchedule renders the time slot schedule with day boundaries
+// renderScheduleSimple renders the time slot schedule with simple indentation for overlaps
 func (m *Model) renderSchedule() string {
 	var lines []string
 
@@ -70,11 +70,10 @@ func (m *Model) renderSchedule() string {
 		visibleSlots = 10
 	}
 
-	// Load events for a wider date range
-	m.loadEventsForSchedule()
+	// Events should already be loaded - don't reload on every render
 
-	// Build event map spanning multiple days
-	eventsBySlot := m.buildEventMap(slotsPerDay)
+	// Build event map and track overlaps
+	eventsBySlot, eventColumns := m.buildSimpleEventLayout(slotsPerDay)
 
 	// Render time slots
 	now := time.Now()
@@ -95,7 +94,7 @@ func (m *Model) renderSchedule() string {
 			}
 		}
 
-		currentDate := m.hourlyDate.AddDate(0, 0, dayOffset)
+		currentDate := m.selectedDate.AddDate(0, 0, dayOffset)
 
 		// Add date separator when day changes
 		if dayOffset != prevDay {
@@ -122,27 +121,32 @@ func (m *Model) renderSchedule() string {
 
 		timeStr := fmt.Sprintf("%02d:%02d", hour, minute)
 
-		// Get events for this slot
-		events := eventsBySlot[globalSlot]
+		// Build the line with events
+		line := timeStr
+		if events, ok := eventsBySlot[globalSlot]; ok && len(events) > 0 {
+			// Add events with indentation based on column assignment
+			eventParts := []string{}
+			for _, event := range events {
+				column := eventColumns[event.ID]
+				indent := strings.Repeat("  ", column) // 2 spaces per indentation level
 
-		// Build the line
-		var line string
-		if len(events) > 0 {
-			eventStr := events[0].Description
-			if len(events) > 1 {
-				eventStr = fmt.Sprintf("%s (+%d)", eventStr, len(events)-1)
+				eventStr := event.Description
+				// Truncate to fit
+				maxLen := (m.width * 2 / 3) - 7 - (column * 2)
+				if maxLen < 20 {
+					maxLen = 20
+				}
+				if len(eventStr) > maxLen {
+					eventStr = eventStr[:maxLen-3] + "..."
+				}
+
+				eventParts = append(eventParts, indent+eventStr)
 			}
-			// Truncate to fit
-			maxLen := m.width*2/3 - 8
-			if maxLen < 20 {
-				maxLen = 20
+
+			// Join all events for this slot
+			if len(eventParts) > 0 {
+				line = fmt.Sprintf("%s  %s", timeStr, strings.Join(eventParts, " "))
 			}
-			if len(eventStr) > maxLen {
-				eventStr = eventStr[:maxLen-3] + "..."
-			}
-			line = fmt.Sprintf("%s  %s", timeStr, eventStr)
-		} else {
-			line = timeStr
 		}
 
 		// Apply styling
@@ -166,13 +170,15 @@ func (m *Model) renderSchedule() string {
 			style = m.styles.Selected
 		}
 
-		// Priority events get colored
-		for _, event := range events {
-			if event.Priority > remind.PriorityNone {
-				if globalSlot != m.selectedSlot { // Don't override selection
-					style = m.styles.Priority
+		// Check for priority events
+		if events, ok := eventsBySlot[globalSlot]; ok {
+			for _, event := range events {
+				if event.Priority > remind.PriorityNone {
+					if globalSlot != m.selectedSlot { // Don't override selection
+						style = m.styles.Priority
+					}
+					break
 				}
-				break
 			}
 		}
 
@@ -182,19 +188,104 @@ func (m *Model) renderSchedule() string {
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
+// buildSimpleEventLayout creates a map of events and assigns them to columns
+func (m *Model) buildSimpleEventLayout(slotsPerDay int) (map[int][]remind.Event, map[string]int) {
+	eventsBySlot := make(map[int][]remind.Event)
+	eventColumns := make(map[string]int)
+
+	// Track which columns are busy at each time slot
+	columnBusy := make(map[int][]string) // slot -> list of event IDs occupying columns
+
+	for _, event := range m.events {
+		if event.Time != nil {
+			// Calculate day offset from base date
+			dayDiff := int(event.Date.Sub(m.selectedDate).Hours() / 24)
+
+			hour := event.Time.Hour()
+			minute := event.Time.Minute()
+			localSlot := hour
+
+			if m.timeIncrement == 30 {
+				localSlot = hour*2 + minute/30
+			} else if m.timeIncrement == 15 {
+				localSlot = hour*4 + minute/15
+			}
+
+			globalSlot := dayDiff*slotsPerDay + localSlot
+
+			// Calculate duration in slots
+			eventSlots := 1
+			if event.Duration != nil {
+				durationMinutes := int(event.Duration.Minutes())
+				if m.timeIncrement == 30 {
+					eventSlots = (durationMinutes + 29) / 30
+				} else if m.timeIncrement == 15 {
+					eventSlots = (durationMinutes + 14) / 15
+				} else {
+					eventSlots = (durationMinutes + 59) / 60
+				}
+			}
+
+			// Find available column for this event
+			column := 0
+			for {
+				isAvailable := true
+				// Check if column is free for entire duration
+				for s := globalSlot; s < globalSlot+eventSlots; s++ {
+					if busy, ok := columnBusy[s]; ok {
+						// Check if this column is occupied
+						if column < len(busy) && busy[column] != "" {
+							isAvailable = false
+							break
+						}
+					}
+				}
+
+				if isAvailable {
+					break
+				}
+				column++
+				if column > 3 { // Limit to 4 columns
+					column = 0
+					break
+				}
+			}
+
+			// Assign column to event
+			eventColumns[event.ID] = column
+
+			// Mark column as busy for duration
+			for s := globalSlot; s < globalSlot+eventSlots; s++ {
+				if columnBusy[s] == nil {
+					columnBusy[s] = make([]string, column+1)
+				}
+				for len(columnBusy[s]) <= column {
+					columnBusy[s] = append(columnBusy[s], "")
+				}
+				columnBusy[s][column] = event.ID
+			}
+
+			// Add event to its starting slot only
+			eventsBySlot[globalSlot] = append(eventsBySlot[globalSlot], event)
+		}
+	}
+
+	return eventsBySlot, eventColumns
+}
+
 // renderMiniCalendar renders a small calendar for navigation
 func (m *Model) renderMiniCalendar() string {
 	var lines []string
 
 	// Month/Year header
-	monthYear := m.hourlyDate.Format("January 2006")
+	monthYear := m.selectedDate.Format("January 2006")
 	lines = append(lines, m.styles.Header.Render(monthYear))
 
 	// Day headers
 	lines = append(lines, "Mo Tu We Th Fr Sa Su")
 
 	// Calculate first day of month
-	firstDay := time.Date(m.hourlyDate.Year(), m.hourlyDate.Month(), 1, 0, 0, 0, 0, time.Local)
+	firstDay := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), 1, 0, 0, 0, 0, time.Local)
 	startOffset := int(firstDay.Weekday())
 	if startOffset == 0 {
 		startOffset = 7 // Sunday -> 7
@@ -212,11 +303,11 @@ func (m *Model) renderMiniCalendar() string {
 			dayStr := fmt.Sprintf("%2d", day.Day())
 
 			// Apply styling
-			if day.Month() != m.hourlyDate.Month() {
+			if day.Month() != m.selectedDate.Month() {
 				dayStr = m.styles.Help.Render(dayStr) // Dimmed
 			} else if day.Year() == today.Year() && day.YearDay() == today.YearDay() {
 				dayStr = m.styles.Today.Render(dayStr)
-			} else if day.Year() == m.hourlyDate.Year() && day.YearDay() == m.hourlyDate.YearDay() {
+			} else if day.Year() == m.selectedDate.Year() && day.YearDay() == m.selectedDate.YearDay() {
 				dayStr = m.styles.Selected.Render(dayStr)
 			} else if day.Weekday() == time.Saturday || day.Weekday() == time.Sunday {
 				dayStr = m.styles.Weekend.Render(dayStr)
@@ -235,7 +326,7 @@ func (m *Model) renderMiniCalendar() string {
 		weekDays = ""
 
 		// Stop if we've shown all days of the month
-		if day.Month() != m.hourlyDate.Month() && week > 3 {
+		if day.Month() != m.selectedDate.Month() && week > 3 {
 			break
 		}
 	}
@@ -257,8 +348,8 @@ func (m *Model) renderUntimedList() string {
 	var untimedEvents []remind.Event
 	for _, event := range m.events {
 		if event.Time == nil &&
-			event.Date.Year() == m.hourlyDate.Year() &&
-			event.Date.YearDay() == m.hourlyDate.YearDay() {
+			event.Date.Year() == m.selectedDate.Year() &&
+			event.Date.YearDay() == m.selectedDate.YearDay() {
 			untimedEvents = append(untimedEvents, event)
 		}
 	}
@@ -311,7 +402,7 @@ func (m *Model) renderEventDescription() string {
 		}
 	}
 
-	selectedDate := m.hourlyDate.AddDate(0, 0, dayOffset)
+	selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
 
 	hour := localSlot
 	minute := 0
@@ -366,11 +457,11 @@ func (m *Model) renderEventDescription() string {
 
 // renderScheduleStatusBar renders the status bar for schedule view
 func (m *Model) renderScheduleStatusBar() string {
-	dateStr := m.hourlyDate.Format("Monday, January 2 at 15:04")
+	dateStr := m.selectedDate.Format("Monday, January 2 at 15:04")
 
 	left := fmt.Sprintf(" Currently: %s", dateStr)
 
-	right := "j/k:slot  H/L:day  J/K:week  z:zoom  n:new  ?:help  q:quit"
+	right := "j/k:slot  H/L:day  J/K:week  z:zoom  o:today  n:new  ?:help  q:quit"
 
 	if m.message != "" {
 		right = m.styles.Message.Render(m.message)
@@ -385,31 +476,3 @@ func (m *Model) renderScheduleStatusBar() string {
 
 	return m.styles.Help.Render(left + middle + right)
 }
-
-// buildEventMap creates a map of events indexed by global slot number
-func (m *Model) buildEventMap(slotsPerDay int) map[int][]remind.Event {
-	eventMap := make(map[int][]remind.Event)
-
-	for _, event := range m.events {
-		if event.Time != nil {
-			// Calculate day offset from base date
-			dayDiff := int(event.Date.Sub(m.hourlyDate).Hours() / 24)
-
-			hour := event.Time.Hour()
-			minute := event.Time.Minute()
-			localSlot := hour
-
-			if m.timeIncrement == 30 {
-				localSlot = hour*2 + minute/30
-			} else if m.timeIncrement == 15 {
-				localSlot = hour*4 + minute/15
-			}
-
-			globalSlot := dayDiff*slotsPerDay + localSlot
-			eventMap[globalSlot] = append(eventMap[globalSlot], event)
-		}
-	}
-
-	return eventMap
-}
-

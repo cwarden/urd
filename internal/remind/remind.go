@@ -33,6 +33,39 @@ func (c *Client) GetEvents(start, end time.Time) ([]Event, error) {
 		return nil, fmt.Errorf("no remind files configured")
 	}
 
+	var allEvents []Event
+
+	// Get events month by month.
+	// Start from the first day of the month containing 'start'
+	currentMonth := time.Date(start.Year(), start.Month(), 1, 0, 0, 0, 0, start.Location())
+
+	for currentMonth.Before(end) || currentMonth.Equal(end) {
+		events, err := c.getEventsForMonth(currentMonth)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get events for %s: %w", currentMonth.Format("Jan 2006"), err)
+		}
+
+		// Filter events to the requested date range
+		for _, event := range events {
+			if !event.Date.Before(start) && !event.Date.After(end) {
+				allEvents = append(allEvents, event)
+			}
+		}
+
+		// Move to next month
+		currentMonth = currentMonth.AddDate(0, 1, 0)
+
+		// Safety check to avoid infinite loop
+		if currentMonth.After(end.AddDate(0, 12, 0)) {
+			break
+		}
+	}
+
+	return allEvents, nil
+}
+
+// getEventsForMonth gets events for a specific month
+func (c *Client) getEventsForMonth(monthStart time.Time) ([]Event, error) {
 	args := []string{
 		"-pppq", // rem2ps format with preprocessing, quiet
 		"-l",    // include file and line number
@@ -43,11 +76,11 @@ func (c *Client) GetEvents(start, end time.Time) ([]Event, error) {
 	// Add remind files
 	args = append(args, c.Files...)
 
-	// Add date arguments (as separate args, not a single string)
+	// Add date arguments for the first day of the month
 	args = append(args,
-		monthName(start.Month()),
-		fmt.Sprintf("%d", start.Day()),
-		fmt.Sprintf("%d", start.Year()))
+		monthName(monthStart.Month()),
+		fmt.Sprintf("%d", monthStart.Day()),
+		fmt.Sprintf("%d", monthStart.Year()))
 
 	cmd := exec.Command(c.RemindPath, args...)
 	output, err := cmd.CombinedOutput()
@@ -69,12 +102,7 @@ func (c *Client) GetEvents(start, end time.Time) ([]Event, error) {
 	var events []Event
 	for _, month := range months {
 		monthEvents := ConvertJSONToEvents(month.Entries, c.Timezone)
-		for _, event := range monthEvents {
-			// Filter by date range
-			if !event.Date.Before(start) && !event.Date.After(end) {
-				events = append(events, event)
-			}
-		}
+		events = append(events, monthEvents...)
 	}
 
 	return events, nil
