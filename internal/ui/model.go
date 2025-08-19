@@ -18,10 +18,7 @@ import (
 type ViewMode int
 
 const (
-	ViewCalendar ViewMode = iota
-	ViewHourly
-	ViewTimedReminders
-	ViewUntimedReminders
+	ViewHourly ViewMode = iota
 	ViewHelp
 	ViewEventEditor
 )
@@ -35,7 +32,6 @@ type Model struct {
 
 	// View state
 	mode            ViewMode
-	currentDate     time.Time
 	selectedDate    time.Time
 	events          []remind.Event
 	eventsLoadedFor time.Time // Track when we last loaded events
@@ -83,7 +79,6 @@ func NewModel(cfg *config.Config, client *remind.Client) *Model {
 		client:        client,
 		parser:        parser.NewTimeParser(),
 		mode:          ViewHourly,
-		currentDate:   now,
 		selectedDate:  now,
 		events:        []remind.Event{},
 		selectedSlot:  now.Hour()*2 + now.Minute()/30, // Default 30-min slots
@@ -197,20 +192,14 @@ func (m *Model) View() string {
 	}
 
 	switch m.mode {
-	case ViewCalendar:
-		return m.viewCalendar()
 	case ViewHourly:
 		return m.viewHourlySchedule()
-	case ViewTimedReminders:
-		return m.viewTimedReminders()
-	case ViewUntimedReminders:
-		return m.viewUntimedReminders()
 	case ViewHelp:
 		return m.viewHelp()
 	case ViewEventEditor:
 		return m.viewEventEditor()
 	default:
-		return m.viewCalendar()
+		return m.viewHourlySchedule()
 	}
 }
 
@@ -224,7 +213,7 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "?":
 		if m.mode == ViewHelp {
-			m.mode = ViewCalendar
+			m.mode = ViewHourly
 		} else {
 			m.mode = ViewHelp
 		}
@@ -256,8 +245,6 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// Mode-specific handling
 	switch m.mode {
-	case ViewCalendar:
-		return m.handleCalendarKeys(msg)
 	case ViewHourly:
 		return m.handleHourlyKeys(msg)
 	case ViewEventEditor:
@@ -464,76 +451,6 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case "1":
-		m.mode = ViewCalendar
-		m.currentDate = m.selectedDate
-		m.loadEvents()
-	}
-
-	return m, nil
-}
-
-func (m *Model) handleCalendarKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "l", "right":
-		// Move right = next day
-		m.selectedDate = m.selectedDate.AddDate(0, 0, 1)
-
-	case "h", "left":
-		// Move left = previous day
-		m.selectedDate = m.selectedDate.AddDate(0, 0, -1)
-
-	case "j", "down":
-		// Move down = next week
-		m.selectedDate = m.selectedDate.AddDate(0, 0, 7)
-
-	case "k", "up":
-		// Move up = previous week
-		m.selectedDate = m.selectedDate.AddDate(0, 0, -7)
-
-	case "J":
-		m.selectedDate = m.selectedDate.AddDate(0, 0, 7)
-		m.currentDate = m.currentDate.AddDate(0, 0, 7)
-
-	case "K":
-		m.selectedDate = m.selectedDate.AddDate(0, 0, -7)
-		m.currentDate = m.currentDate.AddDate(0, 0, -7)
-
-	case ">":
-		m.selectedDate = m.selectedDate.AddDate(0, 1, 0)
-		m.currentDate = m.currentDate.AddDate(0, 1, 0)
-
-	case "<":
-		m.selectedDate = m.selectedDate.AddDate(0, -1, 0)
-		m.currentDate = m.currentDate.AddDate(0, -1, 0)
-
-	case "n":
-		m.mode = ViewEventEditor
-		m.editingEvent = nil
-		m.inputBuffer = ""
-		m.cursorPos = 0
-
-	case "1":
-		m.mode = ViewCalendar
-
-	case "2":
-		m.mode = ViewHourly
-		now := time.Now()
-		// Calculate current slot based on time increment
-		currentSlot := now.Hour()
-		if m.timeIncrement == 30 {
-			currentSlot = now.Hour()*2 + now.Minute()/30
-		} else if m.timeIncrement == 15 {
-			currentSlot = now.Hour()*4 + now.Minute()/15
-		}
-		m.selectedSlot = currentSlot
-		m.topSlot = 0
-
-	case "3":
-		m.mode = ViewTimedReminders
-
-	case "4":
-		m.mode = ViewUntimedReminders
 	}
 
 	return m, nil
@@ -542,7 +459,7 @@ func (m *Model) handleCalendarKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m *Model) handleEditorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyEscape:
-		m.mode = ViewCalendar
+		m.mode = ViewHourly
 		return m, nil
 
 	case tea.KeyEnter:
@@ -567,7 +484,7 @@ func (m *Model) handleEditorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.showMessage(fmt.Sprintf("Parse error: %v", err))
 			}
 		}
-		m.mode = ViewCalendar
+		m.mode = ViewHourly
 		return m, nil
 
 	case tea.KeyBackspace:
@@ -597,8 +514,8 @@ func (m *Model) handleEditorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) loadEvents() {
-	// Get events for the current month view
-	start := time.Date(m.currentDate.Year(), m.currentDate.Month(), 1, 0, 0, 0, 0, time.Local)
+	// Get events for the selected month in hourly view
+	start := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), 1, 0, 0, 0, 0, time.Local)
 	end := start.AddDate(0, 1, -1)
 
 	events, err := m.client.GetEvents(start, end)
