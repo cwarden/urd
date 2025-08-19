@@ -370,7 +370,7 @@ func (m *Model) renderScheduleStatusBar() string {
 
 	left := fmt.Sprintf(" Currently: %s", dateStr)
 
-	right := "↑↓:navigate  h/l:day  z:zoom  n:new  ?:help  q:quit"
+	right := "j/k:slot  H/L:day  J/K:week  z:zoom  n:new  ?:help  q:quit"
 
 	if m.message != "" {
 		right = m.styles.Message.Render(m.message)
@@ -413,14 +413,3 @@ func (m *Model) buildEventMap(slotsPerDay int) map[int][]remind.Event {
 	return eventMap
 }
 
-// loadEventsForSchedule loads events for a wider date range
-func (m *Model) loadEventsForSchedule() {
-	// Load events for current month and adjacent days
-	start := m.hourlyDate.AddDate(0, 0, -7)
-	end := m.hourlyDate.AddDate(0, 0, 7)
-
-	events, err := m.client.GetEvents(start, end)
-	if err == nil {
-		m.events = events
-	}
-}

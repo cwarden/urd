@@ -89,8 +89,8 @@ func NewModel(cfg *config.Config, client *remind.Client) *Model {
 		styles:        DefaultStyles(),
 	}
 
-	// Load initial events
-	m.loadEvents()
+	// Load initial events for hourly view
+	m.loadEventsForSchedule()
 
 	// Set up file watcher
 	watcher, err := remind.NewFileWatcher(func(path string) {
@@ -272,17 +272,29 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.topSlot--
 		}
 
-	case "l", "right":
+	case "l", "right", "L":
 		// Next day - jump forward by one day worth of slots
 		m.selectedSlot += slotsPerDay
 		m.topSlot += slotsPerDay
 		m.hourlyDate = m.hourlyDate.AddDate(0, 0, 1)
 
-	case "h", "left":
+	case "h", "left", "H":
 		// Previous day - jump back by one day worth of slots
 		m.selectedSlot -= slotsPerDay
 		m.topSlot -= slotsPerDay
 		m.hourlyDate = m.hourlyDate.AddDate(0, 0, -1)
+	
+	case "J":
+		// Next week - jump forward by one week worth of slots
+		m.selectedSlot += slotsPerDay * 7
+		m.topSlot += slotsPerDay * 7
+		m.hourlyDate = m.hourlyDate.AddDate(0, 0, 7)
+	
+	case "K":
+		// Previous week - jump back by one week worth of slots
+		m.selectedSlot -= slotsPerDay * 7
+		m.topSlot -= slotsPerDay * 7
+		m.hourlyDate = m.hourlyDate.AddDate(0, 0, -7)
 
 	case "t":
 		// Today - reset to current time
@@ -387,6 +399,9 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "1":
 		m.mode = ViewCalendar
+		m.selectedDate = m.hourlyDate
+		m.currentDate = m.hourlyDate
+		m.loadEvents()
 	}
 
 	return m, nil
@@ -521,6 +536,17 @@ func (m *Model) loadEvents() {
 	start := time.Date(m.currentDate.Year(), m.currentDate.Month(), 1, 0, 0, 0, 0, time.Local)
 	end := start.AddDate(0, 1, -1)
 
+	events, err := m.client.GetEvents(start, end)
+	if err == nil {
+		m.events = events
+	}
+}
+
+func (m *Model) loadEventsForSchedule() {
+	// Load events for a wider date range for hourly view
+	start := m.hourlyDate.AddDate(0, 0, -7)
+	end := m.hourlyDate.AddDate(0, 0, 7)
+	
 	events, err := m.client.GetEvents(start, end)
 	if err == nil {
 		m.events = events

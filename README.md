@@ -76,11 +76,15 @@ urd --version
 - `3` - Timed reminders
 - `4` - Untimed reminders
 
-### Hourly View Controls
+### Hourly View Controls (Default View)
+- `j`/`k` - Navigate up/down between time slots
+- `h`/`H`/`←` - Previous day
+- `l`/`L`/`→` - Next day
+- `J` - Jump to next week
+- `K` - Jump to previous week
 - `z` - Zoom (cycle between 1 hour, 30 minute, and 15 minute time slots)
-- `j`/`k` - Navigate between time slots
-- `h`/`l` - Navigate between days
 - `n` - Create event at selected time slot
+- `t` - Jump to today
 
 ## Configuration
 
