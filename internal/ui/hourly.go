@@ -584,6 +584,82 @@ func (m *Model) renderSelectedSlotEvents() string {
 		}
 	}
 
+	// Find untimed events for the selected day
+	var untimedEvents []remind.Event
+	for _, event := range m.events {
+		if event.Time == nil &&
+			event.Date.Year() == selectedDate.Year() &&
+			event.Date.YearDay() == selectedDate.YearDay() {
+			untimedEvents = append(untimedEvents, event)
+		}
+	}
+
+	// Add untimed reminders section if there are any
+	if len(untimedEvents) > 0 {
+		lines = append(lines, "")
+		lines = append(lines, m.styles.Header.Render("Untimed Reminders"))
+		lines = append(lines, "")
+
+		for i, event := range untimedEvents {
+			if i > 0 {
+				lines = append(lines, "") // Separator between events
+			}
+
+			// Event description
+			desc := event.Description
+			if m.showEventIDs {
+				// Show ID for debugging
+				lines = append(lines, m.styles.Help.Render(fmt.Sprintf("ID: %s", event.ID)))
+			}
+
+			// Format as bullet point
+			bulletPoint := "• " + desc
+
+			// Wrap long descriptions using wordwrap to avoid breaking words/URLs
+			maxWidth := boxWidth - 6 // Account for padding and bullet
+			if maxWidth < 20 {
+				maxWidth = 20 // Minimum width to avoid too narrow wrapping
+			}
+			wrapped := wordwrap.String(bulletPoint, maxWidth)
+			for j, line := range strings.Split(wrapped, "\n") {
+				if line != "" {
+					// Apply style
+					style := m.styles.Event
+					if event.Priority > remind.PriorityNone {
+						style = m.styles.Priority
+					}
+					if j == 0 {
+						// First line has the bullet
+						lines = append(lines, style.Render(line))
+					} else {
+						// Indent continuation lines
+						lines = append(lines, style.Render("  "+line))
+					}
+				}
+			}
+
+			// Tags if any
+			if len(event.Tags) > 0 {
+				tagStr := "  Tags: " + strings.Join(event.Tags, ", ")
+				lines = append(lines, m.styles.Help.Render(tagStr))
+			}
+
+			// Priority indicator
+			if event.Priority > remind.PriorityNone {
+				priorityStr := "  Priority: "
+				switch event.Priority {
+				case remind.PriorityLow:
+					priorityStr += "!"
+				case remind.PriorityMedium:
+					priorityStr += "!!"
+				case remind.PriorityHigh:
+					priorityStr += "!!!"
+				}
+				lines = append(lines, m.styles.Priority.Render(priorityStr))
+			}
+		}
+	}
+
 	// Add border with calculated width
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	boxStyle := m.styles.Border.Copy().Width(boxWidth)
