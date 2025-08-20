@@ -21,6 +21,7 @@ const (
 	ViewHelp
 	ViewEventEditor
 	ViewEventSelector // For choosing between multiple events
+	ViewGotoDate      // For entering a date to jump to
 )
 
 type Model struct {
@@ -217,6 +218,8 @@ func (m *Model) View() string {
 		return m.viewEventEditor()
 	case ViewEventSelector:
 		return m.viewEventSelector()
+	case ViewGotoDate:
+		return m.viewGotoDate()
 	default:
 		return m.viewHourlySchedule()
 	}
@@ -322,6 +325,8 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEditorKeys(msg)
 	case ViewEventSelector:
 		return m.handleEventSelectorKeys(msg)
+	case ViewGotoDate:
+		return m.handleGotoDateKeys(msg)
 	}
 
 	return m, nil
@@ -423,16 +428,14 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "next_month":
 		// Next month - jump forward by one month
 		m.selectedDate = m.selectedDate.AddDate(0, 1, 0)
-		if m.needsEventReload() {
-			m.loadEventsForSchedule()
-		}
+		// Always reload events when changing months
+		m.loadEventsForSchedule()
 
 	case "previous_month":
 		// Previous month - jump back by one month
 		m.selectedDate = m.selectedDate.AddDate(0, -1, 0)
-		if m.needsEventReload() {
-			m.loadEventsForSchedule()
-		}
+		// Always reload events when changing months
+		m.loadEventsForSchedule()
 
 	case "home":
 		// Go to current time - start fresh
@@ -454,6 +457,8 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.topSlot = 0
 		}
 
+		// Always load events for the current date (force reload)
+		m.loadEventsForSchedule()
 		// Show debug message
 		m.showMessage(fmt.Sprintf("Now: %02d:%02d, slot=%d, top=%d", now.Hour(), now.Minute(), m.selectedSlot, m.topSlot))
 
@@ -527,6 +532,14 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.topSlot = 0
 			}
 		}
+
+	case "goto":
+		// Go to specific date
+		m.mode = ViewGotoDate
+		m.inputBuffer = ""
+		m.cursorPos = 0
+		// Don't show a message here since the dialog will show instructions
+		return m, nil
 
 	case "quick_add":
 		// Quick add event using natural language parsing
@@ -1344,6 +1357,109 @@ func (m *Model) handleEditorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorPos++
 	}
 
+	return m, nil
+}
+
+func (m *Model) handleGotoDateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEscape:
+		m.mode = ViewHourly
+		return m, nil
+	case tea.KeyEnter:
+		// Parse the date input
+		if m.inputBuffer != "" {
+			// Try standard date formats FIRST
+			dateFormats := []string{
+				"2006-01-02", // YYYY-MM-DD
+				"01/02/2006", // MM/DD/YYYY
+				"1/2/2006",   // M/D/YYYY
+				"01/02",      // MM/DD (current year)
+				"1/2",        // M/D (current year)
+			}
+
+			var parsedDate time.Time
+			var parseSuccess bool
+
+			for _, format := range dateFormats {
+				if pd, err := time.ParseInLocation(format, m.inputBuffer, time.Local); err == nil {
+					// For MM/DD formats without year, use current year
+					if format == "01/02" || format == "1/2" {
+						parsedDate = time.Date(time.Now().Year(), pd.Month(), pd.Day(),
+							0, 0, 0, 0, time.Local)
+					} else {
+						// Ensure the date is in local timezone with time at midnight
+						parsedDate = time.Date(pd.Year(), pd.Month(), pd.Day(),
+							0, 0, 0, 0, time.Local)
+					}
+					parseSuccess = true
+					break
+				}
+			}
+
+			// If standard formats failed, try natural language parsing
+			if !parseSuccess {
+				parser := &remind.TimeParser{Now: time.Now(), Location: time.Local}
+				date, err := parser.ParseDateOnly(m.inputBuffer)
+				if err == nil {
+					parsedDate = date
+					parseSuccess = true
+				}
+			}
+
+			if parseSuccess {
+				// Jump to the parsed date
+				m.selectedDate = parsedDate
+
+				// Reset the time slot to noon of the selected day
+				m.selectedSlot = 12 // Noon slot for 60-minute increments
+				if m.timeIncrement == 30 {
+					m.selectedSlot = 24 // Noon slot for 30-minute increments
+				} else if m.timeIncrement == 15 {
+					m.selectedSlot = 48 // Noon slot for 15-minute increments
+				}
+
+				// Adjust top slot to center the selected slot
+				visibleSlots := m.height - 2
+				m.topSlot = m.selectedSlot - visibleSlots/2
+				if m.topSlot < 0 {
+					m.topSlot = 0
+				}
+
+				// Load events for the new date
+				m.loadEventsForSchedule()
+				m.showMessage(fmt.Sprintf("Jumped to %s (slot %d)", m.selectedDate.Format("Monday, Jan 2, 2006"), m.selectedSlot))
+				// Clear input buffer
+				m.inputBuffer = ""
+				m.cursorPos = 0
+			} else {
+				m.showMessage(fmt.Sprintf("Invalid date format: %s", m.inputBuffer))
+			}
+		}
+		m.mode = ViewHourly
+		return m, nil
+	case tea.KeyBackspace:
+		if m.cursorPos > 0 {
+			m.inputBuffer = m.inputBuffer[:m.cursorPos-1] + m.inputBuffer[m.cursorPos:]
+			m.cursorPos--
+		}
+	case tea.KeyLeft:
+		if m.cursorPos > 0 {
+			m.cursorPos--
+		}
+	case tea.KeyRight:
+		if m.cursorPos < len(m.inputBuffer) {
+			m.cursorPos++
+		}
+	case tea.KeyRunes:
+		for _, r := range msg.Runes {
+			m.inputBuffer = m.inputBuffer[:m.cursorPos] + string(r) + m.inputBuffer[m.cursorPos:]
+			m.cursorPos++
+		}
+	case tea.KeySpace:
+		// Handle space explicitly
+		m.inputBuffer = m.inputBuffer[:m.cursorPos] + " " + m.inputBuffer[m.cursorPos:]
+		m.cursorPos++
+	}
 	return m, nil
 }
 

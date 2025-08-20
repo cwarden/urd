@@ -287,6 +287,35 @@ func (m *Model) viewEventEditor() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
+func (m *Model) viewGotoDate() string {
+	var sections []string
+
+	header := m.styles.Header.Render("Go to Date")
+	sections = append(sections, header)
+	sections = append(sections, "")
+
+	prompt := m.styles.Normal.Render("Enter date:")
+	sections = append(sections, prompt)
+	sections = append(sections, m.styles.Help.Render("Formats: YYYY-MM-DD, MM/DD/YYYY, MM/DD, today, tomorrow, next monday, etc."))
+
+	// Show input with cursor
+	input := m.inputBuffer
+	if m.cursorPos < len(input) {
+		input = input[:m.cursorPos] + "█" + input[m.cursorPos:]
+	} else {
+		input = input + "█"
+	}
+
+	inputLine := m.styles.Selected.Render(input)
+	sections = append(sections, inputLine)
+	sections = append(sections, "")
+
+	help := m.styles.Help.Render("Enter to go, Esc to cancel")
+	sections = append(sections, help)
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
 func (m *Model) renderStatusBar() string {
 	left := fmt.Sprintf(" %s | Events: %d",
 		m.selectedDate.Format("Jan 2, 2006"),

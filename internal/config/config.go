@@ -86,6 +86,7 @@ func DefaultConfig() *Config {
 			"{":       "previous_month",
 			"}":       "next_month",
 			"o":       "home",
+			"g":       "goto",
 			"z":       "zoom",
 			"<enter>": "edit",
 			"e":       "edit_any",

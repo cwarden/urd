@@ -60,6 +60,27 @@ func (p *TimeParser) Parse(input string) (*ParsedEvent, error) {
 	return result, nil
 }
 
+// ParseDateOnly parses input that is expected to be primarily a date
+// Returns an error if no recognizable date pattern is found
+func (p *TimeParser) ParseDateOnly(input string) (time.Time, error) {
+	input = strings.TrimSpace(input)
+	if input == "" {
+		return time.Time{}, fmt.Errorf("empty input")
+	}
+
+	// Extract time first (can appear anywhere) but ignore it for date-only parsing
+	_, _, _, remaining := p.extractTime(input)
+
+	// Extract date (can appear anywhere in remaining text)
+	hasDate, date, _ := p.ExtractDate(remaining)
+
+	if !hasDate {
+		return time.Time{}, fmt.Errorf("no valid date found in input: %s", input)
+	}
+
+	return date, nil
+}
+
 // extractTime looks for time patterns anywhere in the input and returns the time and remaining text
 func (p *TimeParser) extractTime(input string) (found bool, hour int, minute int, remaining string) {
 	// Look for patterns like "at 2pm", "at 14:30", "at 2:30pm", "2pm", "14:30"
@@ -176,6 +197,35 @@ func (p *TimeParser) ExtractDate(input string) (found bool, date time.Time, rema
 			handler: func(m []string) time.Time {
 				weekday := p.parseWeekday(m[1])
 				return p.findNextWeekday(today, weekday, false)
+			},
+		},
+		{
+			// YYYY-MM-DD format
+			regex: regexp.MustCompile(`\b(\d{4})-(\d{1,2})-(\d{1,2})\b`),
+			handler: func(m []string) time.Time {
+				year, _ := strconv.Atoi(m[1])
+				month, _ := strconv.Atoi(m[2])
+				day, _ := strconv.Atoi(m[3])
+				return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.Location)
+			},
+		},
+		{
+			// MM/DD/YYYY format
+			regex: regexp.MustCompile(`\b(\d{1,2})/(\d{1,2})/(\d{4})\b`),
+			handler: func(m []string) time.Time {
+				month, _ := strconv.Atoi(m[1])
+				day, _ := strconv.Atoi(m[2])
+				year, _ := strconv.Atoi(m[3])
+				return time.Date(year, time.Month(month), day, 0, 0, 0, 0, p.Location)
+			},
+		},
+		{
+			// MM/DD format (current year)
+			regex: regexp.MustCompile(`\b(\d{1,2})/(\d{1,2})\b`),
+			handler: func(m []string) time.Time {
+				month, _ := strconv.Atoi(m[1])
+				day, _ := strconv.Atoi(m[2])
+				return time.Date(p.Now.Year(), time.Month(month), day, 0, 0, 0, 0, p.Location)
 			},
 		},
 	}
