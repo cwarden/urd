@@ -615,3 +615,105 @@ func getWeekdayNum(weekdayName string) int {
 		return 0
 	}
 }
+
+// AddEventStruct adds a remind.Event to the remind file and returns the line number
+func (c *Client) AddEventStruct(event Event) (int, error) {
+	if len(c.Files) == 0 {
+		return 0, fmt.Errorf("no remind files configured")
+	}
+
+	// Use first file for new events
+	file := c.Files[0]
+
+	// Get current line count to know where we're adding the new entry
+	existingContent, err := os.ReadFile(file)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("failed to read remind file: %w", err)
+	}
+	lineNumber := strings.Count(string(existingContent), "\n") + 1
+
+	// Format the remind line based on the event
+	var remindLine string
+	dateStr := event.Date.Format("Jan 2 2006")
+
+	if event.Time != nil {
+		timeStr := event.Time.Format("15:04")
+		remindLine = fmt.Sprintf("REM %s AT %s MSG %s\n", dateStr, timeStr, event.Description)
+	} else {
+		remindLine = fmt.Sprintf("REM %s MSG %s\n", dateStr, event.Description)
+	}
+
+	// Append to file
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open remind file: %w", err)
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(remindLine)
+	if err != nil {
+		return 0, fmt.Errorf("failed to write to remind file: %w", err)
+	}
+
+	return lineNumber, nil
+}
+
+// RemoveEvent removes an event from the remind file
+// This is a simplified implementation that removes by matching description and date
+func (c *Client) RemoveEvent(event Event) error {
+	if len(c.Files) == 0 {
+		return fmt.Errorf("no remind files configured")
+	}
+
+	// Use first file as default - in a full implementation we'd search all files
+	file := c.Files[0]
+
+	// Read the file
+	content, err := os.ReadFile(file)
+	if err != nil {
+		return fmt.Errorf("failed to read remind file: %w", err)
+	}
+
+	lines := strings.Split(string(content), "\n")
+	var newLines []string
+
+	// Create patterns to match the event
+	dateStr := event.Date.Format("Jan 2 2006")
+	descPattern := regexp.QuoteMeta(event.Description)
+
+	var linePattern *regexp.Regexp
+	if event.Time != nil {
+		timeStr := event.Time.Format("15:04")
+		// Pattern for timed events: REM date AT time ... MSG %"description"% ...
+		// This handles complex remind formats like: REM Aug 20 2025 AT 12:00 +10 DURATION 1:00 MSG %"cut%" [t()]
+		linePattern = regexp.MustCompile(fmt.Sprintf(`^REM\s+%s\s+AT\s+%s.*MSG\s+.*%s.*$`,
+			regexp.QuoteMeta(dateStr), regexp.QuoteMeta(timeStr), descPattern))
+	} else {
+		// Pattern for untimed events: REM date MSG %"description"%
+		linePattern = regexp.MustCompile(fmt.Sprintf(`^REM\s+%s.*MSG\s+.*%s.*$`,
+			regexp.QuoteMeta(dateStr), descPattern))
+	}
+
+	// Filter out the matching line (remove first match only)
+	removed := false
+	for _, line := range lines {
+		if !removed && linePattern.MatchString(line) {
+			removed = true
+			continue // Skip this line (remove it)
+		}
+		newLines = append(newLines, line)
+	}
+
+	if !removed {
+		return fmt.Errorf("event not found in remind file")
+	}
+
+	// Write the updated content back to file
+	newContent := strings.Join(newLines, "\n")
+	err = os.WriteFile(file, []byte(newContent), 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write updated remind file: %w", err)
+	}
+
+	return nil
+}

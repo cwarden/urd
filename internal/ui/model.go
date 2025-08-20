@@ -58,6 +58,10 @@ type Model struct {
 	eventChoices       []remind.Event
 	selectedEventIndex int
 
+	// Clipboard state
+	clipboardEvent *remind.Event
+	clipboardCut   bool // true if event was cut (should be removed on paste)
+
 	// Styles
 	styles Styles
 }
@@ -775,6 +779,163 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
 		}
 		return m, nil
+
+	case "copy":
+		// Copy the event at the selected time slot
+		selectedEvent := m.findEventAtSlot(m.selectedSlot)
+		if selectedEvent != nil {
+			m.clipboardEvent = selectedEvent
+			m.clipboardCut = false
+			m.showMessage("Event copied to clipboard")
+		} else {
+			m.showMessage("No event at current time to copy")
+		}
+		return m, nil
+
+	case "cut":
+		// Cut the event at the selected time slot
+		selectedEvent := m.findEventAtSlot(m.selectedSlot)
+		if selectedEvent != nil {
+			// Store in clipboard
+			m.clipboardEvent = selectedEvent
+			m.clipboardCut = true
+
+			// Immediately remove from file
+			if err := m.client.RemoveEvent(*selectedEvent); err != nil {
+				m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
+				m.clipboardEvent = nil
+				m.clipboardCut = false
+			} else {
+				m.showMessage("Event cut to clipboard")
+				// Reload events to show the change
+				m.loadEvents()
+			}
+		} else {
+			m.showMessage("No event at current time to cut")
+		}
+		return m, nil
+
+	case "paste":
+		// Paste the clipboard event at the selected time slot
+		if m.clipboardEvent == nil {
+			m.showMessage("No event in clipboard")
+			return m, nil
+		}
+
+		// Calculate the target date and time from selected slot
+		dayOffset := m.selectedSlot / slotsPerDay
+		localSlot := m.selectedSlot % slotsPerDay
+		if m.selectedSlot < 0 {
+			dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			localSlot = slotsPerDay + (m.selectedSlot % slotsPerDay)
+			if localSlot == slotsPerDay {
+				localSlot = 0
+				dayOffset++
+			}
+		}
+
+		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+		hour := localSlot
+		minute := 0
+		if m.timeIncrement == 30 {
+			hour = localSlot / 2
+			minute = (localSlot % 2) * 30
+		} else if m.timeIncrement == 15 {
+			hour = localSlot / 4
+			minute = (localSlot % 4) * 15
+		}
+
+		// Create a new event based on the clipboard event
+		newEvent := *m.clipboardEvent
+		newEvent.Date = selectedDate
+		if newEvent.Time != nil {
+			newTime := time.Date(selectedDate.Year(), selectedDate.Month(), selectedDate.Day(),
+				hour, minute, 0, 0, selectedDate.Location())
+			newEvent.Time = &newTime
+		}
+
+		// Add the event to the remind file
+		lineNumber, err := m.client.AddEventStruct(newEvent)
+		if err != nil {
+			m.showMessage(fmt.Sprintf("Failed to paste event: %v", err))
+			return m, nil
+		}
+
+		// If it was cut, the original was already removed, so just clear clipboard
+		if m.clipboardCut {
+			m.showMessage("Event moved - launching editor...")
+			m.clipboardEvent = nil
+			m.clipboardCut = false
+		} else {
+			m.showMessage("Event pasted - launching editor...")
+		}
+
+		// Launch editor for the newly pasted event
+		if len(m.config.RemindFiles) > 0 {
+			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
+		}
+		return m, nil
+
+	case "paste_dialog":
+		// Same as paste for now - could add confirmation dialog later
+		if m.clipboardEvent == nil {
+			m.showMessage("No event in clipboard")
+			return m, nil
+		}
+
+		// Calculate the target date and time from selected slot
+		dayOffset := m.selectedSlot / slotsPerDay
+		localSlot := m.selectedSlot % slotsPerDay
+		if m.selectedSlot < 0 {
+			dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			localSlot = slotsPerDay + (m.selectedSlot % slotsPerDay)
+			if localSlot == slotsPerDay {
+				localSlot = 0
+				dayOffset++
+			}
+		}
+
+		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+		hour := localSlot
+		minute := 0
+		if m.timeIncrement == 30 {
+			hour = localSlot / 2
+			minute = (localSlot % 2) * 30
+		} else if m.timeIncrement == 15 {
+			hour = localSlot / 4
+			minute = (localSlot % 4) * 15
+		}
+
+		// Create a new event based on the clipboard event
+		newEvent := *m.clipboardEvent
+		newEvent.Date = selectedDate
+		if newEvent.Time != nil {
+			newTime := time.Date(selectedDate.Year(), selectedDate.Month(), selectedDate.Day(),
+				hour, minute, 0, 0, selectedDate.Location())
+			newEvent.Time = &newTime
+		}
+
+		// Add the event to the remind file
+		lineNumber, err := m.client.AddEventStruct(newEvent)
+		if err != nil {
+			m.showMessage(fmt.Sprintf("Failed to paste event: %v", err))
+			return m, nil
+		}
+
+		// If it was cut, the original was already removed, so just clear clipboard
+		if m.clipboardCut {
+			m.showMessage("Event moved - launching editor...")
+			m.clipboardEvent = nil
+			m.clipboardCut = false
+		} else {
+			m.showMessage("Event pasted - launching editor...")
+		}
+
+		// Launch editor for the newly pasted event
+		if len(m.config.RemindFiles) > 0 {
+			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -1100,6 +1261,15 @@ func (m *Model) getEventsAtSlot(slot int) []remind.Event {
 	}
 
 	return events
+}
+
+// findEventAtSlot returns the first event at the specified time slot (for copy/cut operations)
+func (m *Model) findEventAtSlot(slot int) *remind.Event {
+	events := m.getEventsAtSlot(slot)
+	if len(events) > 0 {
+		return &events[0]
+	}
+	return nil
 }
 
 // findEventFile attempts to locate which remind file contains the given event
