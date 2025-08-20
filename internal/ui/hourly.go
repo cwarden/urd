@@ -76,8 +76,9 @@ func (m *Model) renderSchedule() string {
 	now := time.Now()
 	prevDay := -999
 
-	for i := 0; i < visibleSlots; i++ {
-		globalSlot := m.topSlot + i
+	slotIndex := 0 // Track actual slot index separately from line count
+	for i := 0; i < visibleSlots && slotIndex < visibleSlots; i++ {
+		globalSlot := m.topSlot + slotIndex
 		dayOffset := globalSlot / slotsPerDay
 		localSlot := globalSlot % slotsPerDay
 
@@ -98,13 +99,11 @@ func (m *Model) renderSchedule() string {
 			dateLine := currentDate.Format("─Mon Jan 02")
 			lines = append(lines, m.styles.Header.Render(dateLine))
 			prevDay = dayOffset
-			if i > 0 { // Don't double count first line
-				i++
-				if i >= visibleSlots {
-					break
-				}
-			}
+			// Don't increment slotIndex for the date separator
+			continue
 		}
+
+		slotIndex++ // Only increment for actual time slots
 
 		hour := localSlot
 		minute := 0
