@@ -19,13 +19,16 @@ func (m *Model) viewHourlySchedule() string {
 	scheduleView := m.renderSchedule()
 	calendarView := m.renderMiniCalendar()
 	selectedEventsView := m.renderSelectedSlotEvents()
+	untimedEventsView := m.renderUntimedEvents()
 
-	// Right side: calendar above, selected events below
+	// Right side: calendar above, selected events below, untimed at bottom
 	rightSide := lipgloss.JoinVertical(
 		lipgloss.Left,
 		calendarView,
 		"",
 		selectedEventsView,
+		"",
+		untimedEventsView,
 	)
 
 	// Main content: schedule left, calendar/untimed right
@@ -62,7 +65,7 @@ func (m *Model) renderSchedule() string {
 	}
 
 	// Calculate visible slots
-	visibleSlots := m.height - 6 // Leave room for description and status
+	visibleSlots := m.height - 2 // Leave room for status bar and one padding line
 	if visibleSlots < 10 {
 		visibleSlots = 10
 	}
@@ -584,20 +587,69 @@ func (m *Model) renderSelectedSlotEvents() string {
 		}
 	}
 
+	// Add border with calculated width
+	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
+	boxStyle := m.styles.Border.Copy().Width(boxWidth)
+	return boxStyle.Render(content)
+}
+
+// renderUntimedEvents renders untimed reminders for the selected day
+func (m *Model) renderUntimedEvents() string {
+	// Calculate the selected date based on the selected slot
+	slotsPerDay := 24
+	if m.timeIncrement == 30 {
+		slotsPerDay = 48
+	} else if m.timeIncrement == 15 {
+		slotsPerDay = 96
+	}
+
+	dayOffset := m.selectedSlot / slotsPerDay
+	if m.selectedSlot < 0 {
+		dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+	}
+
+	selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+
 	// Find untimed events for the selected day
 	var untimedEvents []remind.Event
+	selectedIndex := -1
+	eventIndex := 0
+
 	for _, event := range m.events {
 		if event.Time == nil &&
 			event.Date.Year() == selectedDate.Year() &&
 			event.Date.YearDay() == selectedDate.YearDay() {
+			if m.focusUntimed && eventIndex == m.selectedUntimedIndex {
+				selectedIndex = len(untimedEvents)
+			}
 			untimedEvents = append(untimedEvents, event)
+			eventIndex++
 		}
 	}
 
-	// Add untimed reminders section if there are any
-	if len(untimedEvents) > 0 {
+	var lines []string
+
+	// Calculate available width for the box
+	scheduleWidth := m.width * 2 / 3
+	if scheduleWidth < 40 {
+		scheduleWidth = 40
+	}
+	boxWidth := m.width - scheduleWidth - 4
+	if boxWidth < 30 {
+		boxWidth = 30
+	}
+
+	// Header
+	headerText := "Untimed Reminders"
+	if m.focusUntimed {
+		headerText = "▶ " + headerText
+	}
+	lines = append(lines, m.styles.Header.Render(headerText))
+
+	if len(untimedEvents) == 0 {
 		lines = append(lines, "")
-		lines = append(lines, m.styles.Header.Render("Untimed Reminders"))
+		lines = append(lines, m.styles.Help.Render("(no untimed reminders)"))
+	} else {
 		lines = append(lines, "")
 
 		for i, event := range untimedEvents {
@@ -605,11 +657,19 @@ func (m *Model) renderSelectedSlotEvents() string {
 				lines = append(lines, "") // Separator between events
 			}
 
+			// Apply selection style if this event is selected
+			isSelected := m.focusUntimed && i == selectedIndex
+
 			// Event description
 			desc := event.Description
 			if m.showEventIDs {
 				// Show ID for debugging
-				lines = append(lines, m.styles.Help.Render(fmt.Sprintf("ID: %s", event.ID)))
+				idStr := fmt.Sprintf("ID: %s", event.ID)
+				if isSelected {
+					lines = append(lines, m.styles.Selected.Render(idStr))
+				} else {
+					lines = append(lines, m.styles.Help.Render(idStr))
+				}
 			}
 
 			// Format as bullet point
@@ -624,10 +684,15 @@ func (m *Model) renderSelectedSlotEvents() string {
 			for j, line := range strings.Split(wrapped, "\n") {
 				if line != "" {
 					// Apply style
-					style := m.styles.Event
-					if event.Priority > remind.PriorityNone {
+					var style lipgloss.Style
+					if isSelected {
+						style = m.styles.Selected
+					} else if event.Priority > remind.PriorityNone {
 						style = m.styles.Priority
+					} else {
+						style = m.styles.Event
 					}
+
 					if j == 0 {
 						// First line has the bullet
 						lines = append(lines, style.Render(line))
@@ -641,7 +706,11 @@ func (m *Model) renderSelectedSlotEvents() string {
 			// Tags if any
 			if len(event.Tags) > 0 {
 				tagStr := "  Tags: " + strings.Join(event.Tags, ", ")
-				lines = append(lines, m.styles.Help.Render(tagStr))
+				if isSelected {
+					lines = append(lines, m.styles.Selected.Render(tagStr))
+				} else {
+					lines = append(lines, m.styles.Help.Render(tagStr))
+				}
 			}
 
 			// Priority indicator
@@ -655,7 +724,11 @@ func (m *Model) renderSelectedSlotEvents() string {
 				case remind.PriorityHigh:
 					priorityStr += "!!!"
 				}
-				lines = append(lines, m.styles.Priority.Render(priorityStr))
+				if isSelected {
+					lines = append(lines, m.styles.Selected.Render(priorityStr))
+				} else {
+					lines = append(lines, m.styles.Priority.Render(priorityStr))
+				}
 			}
 		}
 	}

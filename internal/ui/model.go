@@ -62,6 +62,10 @@ type Model struct {
 	clipboardEvent *remind.Event
 	clipboardCut   bool // true if event was cut (should be removed on paste)
 
+	// Untimed reminders state
+	focusUntimed         bool // true when focused on untimed reminders box
+	selectedUntimedIndex int  // index of selected untimed reminder
+
 	// Styles
 	styles Styles
 }
@@ -332,7 +336,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		slotsPerDay = 96
 	}
 
-	visibleSlots := m.height - 6
+	visibleSlots := m.height - 2 // Leave room for status bar and one padding line
 	if visibleSlots < 10 {
 		visibleSlots = 10
 	}
@@ -365,6 +369,10 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch action {
 	case "scroll_down":
+		// If focused on untimed reminders, this is handled later
+		if m.focusUntimed {
+			break
+		}
 		// Move down = next time slot (can roll to next day)
 		m.selectedSlot++
 		// Check if selected slot is still visible
@@ -373,6 +381,10 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 	case "scroll_up":
+		// If focused on untimed reminders, this is handled later
+		if m.focusUntimed {
+			break
+		}
 		// Move up = previous time slot (can roll to previous day)
 		m.selectedSlot--
 		// Check if selected slot is still visible
@@ -485,7 +497,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.topSlot = m.topSlot * newSlotsPerDay / (24 * oldIncrement / 60)
 
 		// Ensure selected slot is visible after zoom
-		visibleSlots := m.height - 6
+		visibleSlots := m.height - 2 // Leave room for status bar and one padding line
 		if visibleSlots < 10 {
 			visibleSlots = 10
 		}
@@ -512,7 +524,47 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorPos = 0
 
 	case "edit_any":
-		// Edit event at selected time slot
+		// If focused on untimed reminders, edit the selected untimed reminder
+		if m.focusUntimed {
+			// Calculate the selected date based on the selected slot
+			slotsPerDay := 24
+			if m.timeIncrement == 30 {
+				slotsPerDay = 48
+			} else if m.timeIncrement == 15 {
+				slotsPerDay = 96
+			}
+
+			dayOffset := m.selectedSlot / slotsPerDay
+			if m.selectedSlot < 0 {
+				dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			}
+
+			selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+
+			// Find the selected untimed event
+			eventIndex := 0
+			for _, event := range m.events {
+				if event.Time == nil &&
+					event.Date.Year() == selectedDate.Year() &&
+					event.Date.YearDay() == selectedDate.YearDay() {
+					if eventIndex == m.selectedUntimedIndex {
+						// Edit this event
+						file, err := m.findEventFile(event)
+						if err != nil {
+							m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
+						} else {
+							m.showMessage("Launching editor for untimed reminder...")
+							return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
+						}
+						break
+					}
+					eventIndex++
+				}
+			}
+			return m, nil
+		}
+
+		// Otherwise, edit event at selected time slot
 		event := m.getEventAtSlot(m.selectedSlot)
 		if event != nil {
 			// Find which file contains this event
@@ -668,7 +720,40 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
-	case "edit":
+	case "edit", "entry_complete":
+		// If focused on untimed reminders, edit the selected untimed reminder
+		if m.focusUntimed {
+			// Calculate the selected date based on the selected slot
+			dayOffset := m.selectedSlot / slotsPerDay
+			if m.selectedSlot < 0 {
+				dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			}
+
+			selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+
+			// Find the selected untimed event
+			eventIndex := 0
+			for _, event := range m.events {
+				if event.Time == nil &&
+					event.Date.Year() == selectedDate.Year() &&
+					event.Date.YearDay() == selectedDate.YearDay() {
+					if eventIndex == m.selectedUntimedIndex {
+						// Edit this event
+						file, err := m.findEventFile(event)
+						if err != nil {
+							m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
+						} else {
+							m.showMessage("Launching editor for untimed reminder...")
+							return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
+						}
+						break
+					}
+					eventIndex++
+				}
+			}
+			return m, nil
+		}
+
 		// Edit existing reminder or create new one
 		events := m.getEventsAtSlot(m.selectedSlot)
 
@@ -783,8 +868,36 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "copy":
-		// Copy the event at the selected time slot
-		selectedEvent := m.findEventAtSlot(m.selectedSlot)
+		var selectedEvent *remind.Event
+
+		// If focused on untimed reminders, copy the selected untimed reminder
+		if m.focusUntimed {
+			// Calculate the selected date based on the selected slot
+			dayOffset := m.selectedSlot / slotsPerDay
+			if m.selectedSlot < 0 {
+				dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			}
+
+			selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+
+			// Find the selected untimed event
+			eventIndex := 0
+			for i := range m.events {
+				if m.events[i].Time == nil &&
+					m.events[i].Date.Year() == selectedDate.Year() &&
+					m.events[i].Date.YearDay() == selectedDate.YearDay() {
+					if eventIndex == m.selectedUntimedIndex {
+						selectedEvent = &m.events[i]
+						break
+					}
+					eventIndex++
+				}
+			}
+		} else {
+			// Copy the event at the selected time slot
+			selectedEvent = m.findEventAtSlot(m.selectedSlot)
+		}
+
 		if selectedEvent != nil {
 			m.clipboardEvent = selectedEvent
 			m.clipboardCut = false
@@ -795,8 +908,36 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "cut":
-		// Cut the event at the selected time slot
-		selectedEvent := m.findEventAtSlot(m.selectedSlot)
+		var selectedEvent *remind.Event
+
+		// If focused on untimed reminders, cut the selected untimed reminder
+		if m.focusUntimed {
+			// Calculate the selected date based on the selected slot
+			dayOffset := m.selectedSlot / slotsPerDay
+			if m.selectedSlot < 0 {
+				dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			}
+
+			selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+
+			// Find the selected untimed event
+			eventIndex := 0
+			for i := range m.events {
+				if m.events[i].Time == nil &&
+					m.events[i].Date.Year() == selectedDate.Year() &&
+					m.events[i].Date.YearDay() == selectedDate.YearDay() {
+					if eventIndex == m.selectedUntimedIndex {
+						selectedEvent = &m.events[i]
+						break
+					}
+					eventIndex++
+				}
+			}
+		} else {
+			// Cut the event at the selected time slot
+			selectedEvent = m.findEventAtSlot(m.selectedSlot)
+		}
+
 		if selectedEvent != nil {
 			// Store in clipboard
 			m.clipboardEvent = selectedEvent
@@ -818,13 +959,13 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "paste":
-		// Paste the clipboard event at the selected time slot
+		// Paste the clipboard event at the selected time slot or as untimed
 		if m.clipboardEvent == nil {
 			m.showMessage("No event in clipboard")
 			return m, nil
 		}
 
-		// Calculate the target date and time from selected slot
+		// Calculate the target date from selected slot
 		dayOffset := m.selectedSlot / slotsPerDay
 		localSlot := m.selectedSlot % slotsPerDay
 		if m.selectedSlot < 0 {
@@ -837,23 +978,31 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
-		hour := localSlot
-		minute := 0
-		if m.timeIncrement == 30 {
-			hour = localSlot / 2
-			minute = (localSlot % 2) * 30
-		} else if m.timeIncrement == 15 {
-			hour = localSlot / 4
-			minute = (localSlot % 4) * 15
-		}
 
 		// Create a new event based on the clipboard event
 		newEvent := *m.clipboardEvent
 		newEvent.Date = selectedDate
-		if newEvent.Time != nil {
+
+		if m.focusUntimed {
+			// Pasting into untimed section - remove time
+			newEvent.Time = nil
+			newEvent.Duration = nil
+		} else {
+			// Pasting into timed section - set or update time
+			hour := localSlot
+			minute := 0
+			if m.timeIncrement == 30 {
+				hour = localSlot / 2
+				minute = (localSlot % 2) * 30
+			} else if m.timeIncrement == 15 {
+				hour = localSlot / 4
+				minute = (localSlot % 4) * 15
+			}
+
 			newTime := time.Date(selectedDate.Year(), selectedDate.Month(), selectedDate.Day(),
 				hour, minute, 0, 0, selectedDate.Location())
 			newEvent.Time = &newTime
+			// Keep duration if original event had one, otherwise leave nil
 		}
 
 		// Add the event to the remind file
@@ -885,7 +1034,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Calculate the target date and time from selected slot
+		// Calculate the target date from selected slot
 		dayOffset := m.selectedSlot / slotsPerDay
 		localSlot := m.selectedSlot % slotsPerDay
 		if m.selectedSlot < 0 {
@@ -898,23 +1047,31 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
-		hour := localSlot
-		minute := 0
-		if m.timeIncrement == 30 {
-			hour = localSlot / 2
-			minute = (localSlot % 2) * 30
-		} else if m.timeIncrement == 15 {
-			hour = localSlot / 4
-			minute = (localSlot % 4) * 15
-		}
 
 		// Create a new event based on the clipboard event
 		newEvent := *m.clipboardEvent
 		newEvent.Date = selectedDate
-		if newEvent.Time != nil {
+
+		if m.focusUntimed {
+			// Pasting into untimed section - remove time
+			newEvent.Time = nil
+			newEvent.Duration = nil
+		} else {
+			// Pasting into timed section - set or update time
+			hour := localSlot
+			minute := 0
+			if m.timeIncrement == 30 {
+				hour = localSlot / 2
+				minute = (localSlot % 2) * 30
+			} else if m.timeIncrement == 15 {
+				hour = localSlot / 4
+				minute = (localSlot % 4) * 15
+			}
+
 			newTime := time.Date(selectedDate.Year(), selectedDate.Month(), selectedDate.Day(),
 				hour, minute, 0, 0, selectedDate.Location())
 			newEvent.Time = &newTime
+			// Keep duration if original event had one, otherwise leave nil
 		}
 
 		// Add the event to the remind file
@@ -938,6 +1095,76 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
 		}
 		return m, nil
+	}
+
+	// Handle tab key for switching focus between timed and untimed reminders
+	if key == "tab" || key == "<tab>" {
+		// Toggle focus between timed slots and untimed reminders
+		m.focusUntimed = !m.focusUntimed
+		if m.focusUntimed {
+			// Reset untimed selection index when switching to untimed
+			m.selectedUntimedIndex = 0
+			m.showMessage("Focused on untimed reminders")
+		} else {
+			m.showMessage("Focused on timed slots")
+		}
+		return m, nil
+	}
+
+	// Handle navigation within untimed reminders when focused
+	if m.focusUntimed {
+		// Count untimed events for selected day
+		slotsPerDay := 24
+		if m.timeIncrement == 30 {
+			slotsPerDay = 48
+		} else if m.timeIncrement == 15 {
+			slotsPerDay = 96
+		}
+
+		dayOffset := m.selectedSlot / slotsPerDay
+		if m.selectedSlot < 0 {
+			dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+		}
+
+		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+
+		// Count untimed events for this day
+		untimedCount := 0
+		for _, event := range m.events {
+			if event.Time == nil &&
+				event.Date.Year() == selectedDate.Year() &&
+				event.Date.YearDay() == selectedDate.YearDay() {
+				untimedCount++
+			}
+		}
+
+		// Handle navigation actions when focused on untimed reminders
+		switch action {
+		case "scroll_down":
+			if m.selectedUntimedIndex < untimedCount-1 {
+				m.selectedUntimedIndex++
+			}
+			return m, nil
+		case "scroll_up":
+			if m.selectedUntimedIndex > 0 {
+				m.selectedUntimedIndex--
+			}
+			return m, nil
+		}
+
+		// Also handle raw keys for navigation (but not enter - that's handled by edit_any)
+		switch key {
+		case "j", "<down>":
+			if m.selectedUntimedIndex < untimedCount-1 {
+				m.selectedUntimedIndex++
+			}
+			return m, nil
+		case "k", "<up>":
+			if m.selectedUntimedIndex > 0 {
+				m.selectedUntimedIndex--
+			}
+			return m, nil
+		}
 	}
 
 	return m, nil
@@ -1257,10 +1484,8 @@ func (m *Model) getEventsAtSlot(slot int) []remind.Event {
 			if eventSlot == localSlot {
 				events = append(events, event)
 			}
-		} else {
-			// For untimed events, add them all for this day
-			events = append(events, event)
 		}
+		// Don't include untimed events - they're not "at" a time slot
 	}
 
 	return events
@@ -1325,7 +1550,7 @@ func (m *Model) isSlotVisible(slot int) bool {
 	}
 
 	// Calculate visible slots
-	visibleSlots := m.height - 6 // Leave room for description and status
+	visibleSlots := m.height - 2 // Leave room for status bar and one padding line // Leave room for description and status
 	if visibleSlots < 10 {
 		visibleSlots = 10
 	}

@@ -665,7 +665,47 @@ func (c *Client) RemoveEvent(event Event) error {
 		return fmt.Errorf("no remind files configured")
 	}
 
-	// Use first file as default - in a full implementation we'd search all files
+	// If we have a line number, use it directly
+	if event.LineNumber > 0 {
+		// If we have a filename, use it; otherwise use the first file
+		file := event.Filename
+		if file == "" && len(c.Files) > 0 {
+			file = c.Files[0]
+		}
+
+		// Read the file
+		content, err := os.ReadFile(file)
+		if err != nil {
+			return fmt.Errorf("failed to read remind file: %w", err)
+		}
+
+		lines := strings.Split(string(content), "\n")
+
+		// Check if line number is valid
+		if event.LineNumber > len(lines) {
+			return fmt.Errorf("line number %d exceeds file length", event.LineNumber)
+		}
+
+		// Remove the line at the specified line number (1-indexed)
+		var newLines []string
+		for i, line := range lines {
+			if i != event.LineNumber-1 { // Line numbers are 1-indexed
+				newLines = append(newLines, line)
+			}
+		}
+
+		// Write the updated content back to file
+		newContent := strings.Join(newLines, "\n")
+		err = os.WriteFile(file, []byte(newContent), 0644)
+		if err != nil {
+			return fmt.Errorf("failed to write updated remind file: %w", err)
+		}
+
+		return nil
+	}
+
+	// Fallback to pattern matching if no line number
+	// Use first file as default
 	file := c.Files[0]
 
 	// Read the file
@@ -677,21 +717,20 @@ func (c *Client) RemoveEvent(event Event) error {
 	lines := strings.Split(string(content), "\n")
 	var newLines []string
 
-	// Create patterns to match the event
-	dateStr := event.Date.Format("Jan 2 2006")
+	// Create patterns to match the event - be more flexible with date formats
 	descPattern := regexp.QuoteMeta(event.Description)
 
 	var linePattern *regexp.Regexp
 	if event.Time != nil {
 		timeStr := event.Time.Format("15:04")
-		// Pattern for timed events: REM date AT time ... MSG %"description"% ...
-		// This handles complex remind formats like: REM Aug 20 2025 AT 12:00 +10 DURATION 1:00 MSG %"cut%" [t()]
-		linePattern = regexp.MustCompile(fmt.Sprintf(`^REM\s+%s\s+AT\s+%s.*MSG\s+.*%s.*$`,
-			regexp.QuoteMeta(dateStr), regexp.QuoteMeta(timeStr), descPattern))
+		// Pattern for timed events with flexible date format
+		// Match lines like: REM 20 AT 09:30 DURATION 1:00 MSG wat
+		// or: REM Jan 20 2025 AT 09:30 MSG description
+		linePattern = regexp.MustCompile(fmt.Sprintf(`^REM\s+.*AT\s+%s.*MSG\s+.*%s.*$`,
+			regexp.QuoteMeta(timeStr), descPattern))
 	} else {
-		// Pattern for untimed events: REM date MSG %"description"%
-		linePattern = regexp.MustCompile(fmt.Sprintf(`^REM\s+%s.*MSG\s+.*%s.*$`,
-			regexp.QuoteMeta(dateStr), descPattern))
+		// Pattern for untimed events with flexible date format
+		linePattern = regexp.MustCompile(fmt.Sprintf(`^REM\s+.*MSG\s+.*%s.*$`, descPattern))
 	}
 
 	// Filter out the matching line (remove first match only)
