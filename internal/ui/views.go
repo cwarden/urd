@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -10,21 +11,50 @@ import (
 func (m *Model) viewHelp() string {
 	// Create a map of actions to descriptions
 	actionDescriptions := map[string]string{
-		"scroll_down":   "Next time slot",
-		"scroll_up":     "Previous time slot",
-		"previous_day":  "Previous day",
-		"next_day":      "Next day",
-		"previous_week": "Previous week",
-		"next_week":     "Next week",
-		"home":          "Go to current time",
-		"zoom":          "Zoom (change time increment)",
-		"edit":          "Edit/create reminder",
-		"edit_any":      "Edit reminder file",
-		"new_timed":     "Add timed reminder",
-		"quick_add":     "Quick add event",
-		"refresh":       "Refresh",
-		"help":          "Toggle help",
-		"quit":          "Quit",
+		// Navigation
+		"scroll_down":    "Next time slot",
+		"scroll_up":      "Previous time slot",
+		"previous_day":   "Previous day",
+		"next_day":       "Next day",
+		"previous_week":  "Previous week",
+		"next_week":      "Next week",
+		"previous_month": "Previous month",
+		"next_month":     "Next month",
+		"home":           "Go to current time",
+		"goto":           "Go to specific date",
+		"zoom":           "Zoom (change time increment)",
+		// Basic actions
+		"edit":        "Edit/create reminder",
+		"edit_any":    "Edit reminder file",
+		"new_timed":   "Add timed reminder",
+		"new_untimed": "Add untimed reminder",
+		"quick_add":   "Quick add event",
+		// Templates
+		"new_template0":        "Weekly recurring reminder",
+		"new_template1":        "Weekly untimed reminder",
+		"new_template2":        "Monthly recurring reminder",
+		"new_template3":        "Monthly untimed reminder",
+		"new_template4_dialog": "Todo (floating date)",
+		"new_template5":        "Instantaneous reminder",
+		"new_template6_dialog": "Goal with due date",
+		"new_template7":        "Floating date reminder",
+		"new_template8":        "Weekday floating reminder",
+		"new_untimed_dialog":   "Untimed reminder (dialog)",
+		// Clipboard
+		"copy":  "Copy reminder",
+		"cut":   "Cut reminder",
+		"paste": "Paste reminder",
+		// Search
+		"begin_search": "Begin search",
+		"search_next":  "Search next",
+		// View modes
+		"view_week":   "Week view",
+		"view_month":  "Month view",
+		"view_remind": "Remind output",
+		// General
+		"refresh": "Refresh",
+		"help":    "Toggle help",
+		"quit":    "Quit",
 	}
 
 	// Build help text using configured key bindings
@@ -34,48 +64,157 @@ func (m *Model) viewHelp() string {
 		m.styles.Normal.Render("Navigation:"),
 	}
 
-	// Add navigation keys
-	navActions := []string{"scroll_down", "scroll_up", "previous_day", "next_day", "previous_week", "next_week", "home"}
-	for _, action := range navActions {
-		// Find all keys bound to this action
-		var keys []string
-		for key, boundAction := range m.config.KeyBindings {
-			if boundAction == action {
-				keys = append(keys, key)
+	// Helper function to add bound keys for a list of actions
+	addBoundActions := func(actions []string) {
+		for _, action := range actions {
+			// Find all keys bound to this action
+			var keys []string
+			for key, boundAction := range m.config.KeyBindings {
+				if boundAction == action {
+					keys = append(keys, key)
+				}
+			}
+			if len(keys) > 0 {
+				// Sort keys for consistent display
+				sort.Strings(keys)
+
+				// Clean up keys for better display
+				var displayKeys []string
+				for _, key := range keys {
+					// Convert control sequences to more readable format
+					if strings.HasPrefix(key, "\\\\C") && len(key) == 4 {
+						// Convert \\Cl to Ctrl+L, \\Ca to Ctrl+A, etc.
+						ctrlKey := strings.ToUpper(string(key[3]))
+						displayKey := "Ctrl+" + ctrlKey
+						if !contains(displayKeys, displayKey) {
+							displayKeys = append(displayKeys, displayKey)
+						}
+					} else {
+						displayKeys = append(displayKeys, key)
+					}
+				}
+
+				// Show all keys for this action (up to 3)
+				keyStr := displayKeys[0]
+				if len(displayKeys) > 1 {
+					for i := 1; i < len(displayKeys) && i < 3; i++ {
+						keyStr += "/" + displayKeys[i]
+					}
+					if len(displayKeys) > 3 {
+						keyStr += "..."
+					}
+				}
+				if desc, ok := actionDescriptions[action]; ok {
+					help = append(help, m.styles.Help.Render(fmt.Sprintf("  %-12s - %s", keyStr, desc)))
+				}
 			}
 		}
-		if len(keys) > 0 {
-			// Show first key binding for this action
-			help = append(help, m.styles.Help.Render(fmt.Sprintf("  %-10s - %s", keys[0], actionDescriptions[action])))
-		}
 	}
+
+	// Navigation section
+	navActions := []string{"scroll_down", "scroll_up", "previous_day", "next_day",
+		"previous_week", "next_week", "previous_month", "next_month", "home", "goto", "zoom"}
+	addBoundActions(navActions)
 
 	help = append(help, "")
 	help = append(help, m.styles.Normal.Render("Actions:"))
 
-	// Add action keys
-	actionKeys := []string{"quick_add", "new_timed", "edit", "edit_any", "refresh", "zoom", "help", "quit"}
-	for _, action := range actionKeys {
-		// Find all keys bound to this action
-		var keys []string
-		for key, boundAction := range m.config.KeyBindings {
+	// Basic actions
+	basicActions := []string{"edit", "edit_any", "quick_add", "new_timed", "new_untimed", "refresh"}
+	addBoundActions(basicActions)
+
+	// Templates section
+	templateActions := []string{"new_template0", "new_template1", "new_template2", "new_template3",
+		"new_template4_dialog", "new_template5", "new_template6_dialog", "new_template7", "new_template8",
+		"new_untimed_dialog"}
+	// Check if any templates are bound
+	hasTemplates := false
+	for _, action := range templateActions {
+		for _, boundAction := range m.config.KeyBindings {
 			if boundAction == action {
-				keys = append(keys, key)
+				hasTemplates = true
+				break
 			}
 		}
-		if len(keys) > 0 {
-			// Show first key binding for this action
-			help = append(help, m.styles.Help.Render(fmt.Sprintf("  %-10s - %s", keys[0], actionDescriptions[action])))
+		if hasTemplates {
+			break
 		}
 	}
+	if hasTemplates {
+		help = append(help, "")
+		help = append(help, m.styles.Normal.Render("Templates:"))
+		addBoundActions(templateActions)
+	}
 
-	// Add hard-coded keys
-	help = append(help, m.styles.Help.Render("  i          - Toggle event IDs"))
+	// Clipboard section (if bound)
+	clipboardActions := []string{"copy", "cut", "paste"}
+	hasClipboard := false
+	for _, action := range clipboardActions {
+		for _, boundAction := range m.config.KeyBindings {
+			if boundAction == action {
+				hasClipboard = true
+				break
+			}
+		}
+	}
+	if hasClipboard {
+		help = append(help, "")
+		help = append(help, m.styles.Normal.Render("Clipboard:"))
+		addBoundActions(clipboardActions)
+	}
+
+	// Search section (if bound)
+	searchActions := []string{"begin_search", "search_next"}
+	hasSearch := false
+	for _, action := range searchActions {
+		for _, boundAction := range m.config.KeyBindings {
+			if boundAction == action {
+				hasSearch = true
+				break
+			}
+		}
+	}
+	if hasSearch {
+		help = append(help, "")
+		help = append(help, m.styles.Normal.Render("Search:"))
+		addBoundActions(searchActions)
+	}
+
+	// General
+	help = append(help, "")
+	help = append(help, m.styles.Normal.Render("General:"))
+	generalActions := []string{"help", "quit"}
+	addBoundActions(generalActions)
+
+	// Add hard-coded keys (only if not bound to something else)
+	if _, bound := m.config.KeyBindings["i"]; !bound {
+		help = append(help, "")
+		help = append(help, m.styles.Normal.Render("Special:"))
+		help = append(help, m.styles.Help.Render("  i            - Toggle event IDs"))
+	}
 
 	help = append(help, "")
-	help = append(help, m.styles.Help.Render("Press any key to return..."))
+	// Show which keys actually exit help based on configuration
+	helpKey := "?"
+	for key, action := range m.config.KeyBindings {
+		if action == "help" {
+			helpKey = key
+			break
+		}
+	}
+	help = append(help, m.styles.Help.Render(fmt.Sprintf("Press %s, Esc, or q to return", helpKey)))
 
 	return lipgloss.JoinVertical(lipgloss.Left, help...)
+}
+
+// contains checks if a slice contains a specific string
+func contains(slice []string, item string) bool {
+	for _, s := range slice {
+		if s == item {
+			return true
+		}
+	}
+	return false
 }
 
 func (m *Model) viewEventSelector() string {

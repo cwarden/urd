@@ -12,6 +12,7 @@ A terminal calendar application inspired by wyrd, providing a TUI frontend for t
 - **Customizable**: Extensive configuration via urdrc file
 - **Priority Support**: Mark events with priority levels (!, !!, !!!)
 - **Tag Support**: Organize events with @tags
+- **Template System**: Create reminders using customizable templates (weekly, monthly, todo, goals, etc.)
 
 ## Installation
 
@@ -53,7 +54,7 @@ urd --version
 
 ## Keyboard Shortcuts
 
-Key bindings are fully customizable via the urdrc configuration file. The default bindings are:
+Key bindings are fully customizable via the urdrc configuration file. Configured bindings override defaults. The default bindings are:
 
 ### Navigation (Hourly View)
 - `j`/`↓` - Scroll down (next time slot)
@@ -68,12 +69,24 @@ Key bindings are fully customizable via the urdrc configuration file. The defaul
 ### Actions
 - `Enter` - Edit existing reminder or create new one at cursor
 - `t` - Add new timed reminder using template
+- `u` - Add new untimed reminder
 - `q` - Quick add event
 - `e` - Edit reminder file
 - `Ctrl+L` - Refresh
 - `?` - Toggle help
 - `Q` - Quit
-- `i` - Toggle event IDs (not configurable)
+- `i` - Toggle event IDs (default, can be overridden)
+
+### Template-Based Creation
+- `w` - Weekly recurring reminder (template0)
+- `m` - Monthly recurring reminder (template2)
+- `M` - Monthly untimed reminder (template3)
+- `T` - Todo item with floating date (template4)
+- `I` - Instantaneous reminder (no duration) (template5)
+- `G` - Goal with due date (template6)
+- `f` - Floating date reminder (template7)
+- `W` - Weekday floating reminder (template8)
+- `U` - Untimed reminder with dialog
 
 ### Event Selection
 When multiple events exist at the same time:

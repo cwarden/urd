@@ -36,9 +36,12 @@ type Config struct {
 	WrapText      bool
 
 	// Templates
-	QuickTemplate  string
-	TimedTemplate  string
-	AllDayTemplate string
+	QuickTemplate   string
+	TimedTemplate   string
+	AllDayTemplate  string
+	UntimedTemplate string
+	// Numbered templates (0-9)
+	Templates [10]string
 
 	// Editor commands
 	EditOldCommand string // Edit existing reminder at specific line
@@ -86,7 +89,6 @@ func DefaultConfig() *Config {
 			"e":       "edit_any",
 			"t":       "new_timed",
 			"q":       "quick_add",
-			"\\Cl":    "refresh",
 			"?":       "help",
 			"Q":       "quit",
 		},
@@ -97,9 +99,22 @@ func DefaultConfig() *Config {
 		ConfirmDelete: true,
 		WrapText:      true,
 
-		QuickTemplate:  `REM %monname% %mday% %year% MSG %"<++>%" %`,
-		TimedTemplate:  `REM %monname% %mday% %year% <++>AT %hour%:%min% +%dura%<++> DURATION %dura%:00<++> MSG %"<++>%" %`,
-		AllDayTemplate: `REM %monname% %mday% %year% MSG %"<++>%" %`,
+		QuickTemplate:   `REM %monname% %mday% %year% MSG %"<++>%" %`,
+		TimedTemplate:   `REM %monname% %mday% %year% <++>AT %hour%:%min% +%dura%<++> DURATION %dura%:00<++> MSG %"<++>%" %`,
+		AllDayTemplate:  `REM %monname% %mday% %year% MSG %"<++>%" %`,
+		UntimedTemplate: `REM %monname% %mday% %year% <++>MSG %"<++>%" %`,
+		Templates: [10]string{
+			`REM %wdayname% AT %hour%:%min% DURATION 1:00 MSG `,                                                        // template0 - weekly recurrence
+			`REM %wdayname% MSG `,                                                                                      // template1 - weekly untimed
+			`REM %mday% AT %hour%:%min% DURATION 1:00 MSG `,                                                            // template2 - monthly recurrence
+			`REM %mday% MSG `,                                                                                          // template3 - monthly untimed
+			`REM [float(%year%,%mon%,%mday%)] MSG <++>%"%"`,                                                            // template4 - todo
+			`REM %monname% %mday% %year% AT %hour%:%min% <++>MSG %"<++>%" %`,                                           // template5 - instantaneous
+			`REM [float(%year%,%mon%,%mday%)] MSG <++> [due(%year%,%mon%<++>,%mday%<++>)]%"%"`,                         // template6 - goal
+			`REM [float(%year%,%mon%,%mday%)] <++>AT %hour%:%min% <++> MSG %"<++>%"`,                                   // template7 - float
+			`REM Mon Tue Wed Thu Fri <++> SCANFROM [float(%year%,%mon%,%mday%)] <++>AT %hour%:%min% <++> MSG %"<++>%"`, // template8 - weekday float
+			``, // template9 - unused
+		},
 
 		// Default editor commands - use vim with line numbers
 		EditOldCommand: "vim +%line% %file%",
@@ -313,11 +328,32 @@ func (c *Config) setVariable(name, value string) error {
 	case "edit_any_command":
 		c.EditAnyCommand = value
 
-	case "untimed_template", "timed_bold", "untimed_bold", "description_first", "schedule_12_hour", "busy_algorithm", "goto_big_endian", "untimed_duration", "status_12_hour", "center_cursor":
-		// TODO: Implement additional display options
+	case "untimed_template":
+		c.UntimedTemplate = value
 
-	case "template0", "template1", "template2", "template3", "template4", "template5", "template6", "template7", "template8", "template9":
-		// TODO: Implement template configurations for quick event creation
+	case "template0":
+		c.Templates[0] = value
+	case "template1":
+		c.Templates[1] = value
+	case "template2":
+		c.Templates[2] = value
+	case "template3":
+		c.Templates[3] = value
+	case "template4":
+		c.Templates[4] = value
+	case "template5":
+		c.Templates[5] = value
+	case "template6":
+		c.Templates[6] = value
+	case "template7":
+		c.Templates[7] = value
+	case "template8":
+		c.Templates[8] = value
+	case "template9":
+		c.Templates[9] = value
+
+	case "timed_bold", "untimed_bold", "description_first", "schedule_12_hour", "busy_algorithm", "goto_big_endian", "untimed_duration", "status_12_hour", "center_cursor":
+		// TODO: Implement additional display options
 
 	case "busy_level1", "busy_level2", "busy_level3", "busy_level4":
 		// TODO: Implement busy level colors

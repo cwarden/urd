@@ -244,51 +244,63 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Look up the action for this key
 	action := m.getActionForKey(key)
 
-	// Global keys that work in all modes
-	switch action {
-	case "quit":
-		if m.mode != ViewEventEditor {
-			return m, tea.Quit
+	// If there's a configured action for this key, handle it
+	if action != "" {
+		// Global keys that work in all modes
+		switch action {
+		case "quit":
+			if m.mode != ViewEventEditor {
+				return m, tea.Quit
+			}
+		case "help":
+			if m.mode == ViewHelp {
+				m.mode = ViewHourly
+			} else {
+				m.mode = ViewHelp
+			}
+			return m, nil
+		case "refresh":
+			m.loadEvents()
+			now := time.Now()
+			currentTimeSlot := now.Hour()
+			if m.timeIncrement == 30 {
+				currentTimeSlot = now.Hour()*2 + now.Minute()/30
+			} else if m.timeIncrement == 15 {
+				currentTimeSlot = now.Hour()*4 + now.Minute()/15
+			}
+			m.showMessage(fmt.Sprintf("Refreshed - Now: %02d:%02d, slot=%d, selected=%d", now.Hour(), now.Minute(), currentTimeSlot, m.selectedSlot))
+			return m, nil
 		}
-	case "help":
-		if m.mode == ViewHelp {
-			m.mode = ViewHourly
-		} else {
-			m.mode = ViewHelp
+	} else {
+		// No configured binding - check for hard-coded keys
+		switch key {
+		case "ctrl+c":
+			if m.mode != ViewEventEditor {
+				return m, tea.Quit
+			}
+		case "i":
+			// Toggle showing event IDs (only if not bound to something else)
+			m.showEventIDs = !m.showEventIDs
+			if m.showEventIDs {
+				m.showMessage("Showing event IDs")
+			} else {
+				m.showMessage("Hiding event IDs")
+			}
+			return m, nil
 		}
-		return m, nil
-	case "refresh":
-		m.loadEvents()
-		now := time.Now()
-		currentTimeSlot := now.Hour()
-		if m.timeIncrement == 30 {
-			currentTimeSlot = now.Hour()*2 + now.Minute()/30
-		} else if m.timeIncrement == 15 {
-			currentTimeSlot = now.Hour()*4 + now.Minute()/15
-		}
-		m.showMessage(fmt.Sprintf("Refreshed - Now: %02d:%02d, slot=%d, selected=%d", now.Hour(), now.Minute(), currentTimeSlot, m.selectedSlot))
-		return m, nil
-	}
-
-	// Handle hard-coded keys
-	switch key {
-	case "ctrl+c":
-		if m.mode != ViewEventEditor {
-			return m, tea.Quit
-		}
-	case "i", "I":
-		// Toggle showing event IDs
-		m.showEventIDs = !m.showEventIDs
-		if m.showEventIDs {
-			m.showMessage("Showing event IDs")
-		} else {
-			m.showMessage("Hiding event IDs")
-		}
-		return m, nil
 	}
 
 	// Mode-specific handling
 	switch m.mode {
+	case ViewHelp:
+		// In help mode, only respond to keys that exit help
+		switch key {
+		case "?", "<esc>", "q":
+			m.mode = ViewHourly
+			return m, nil
+		}
+		// Ignore all other keys in help mode
+		return m, nil
 	case ViewHourly:
 		return m.handleHourlyKeys(msg)
 	case ViewEventEditor:
@@ -557,6 +569,99 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
 		}
 
+	case "new_untimed":
+		// Add new untimed reminder at selected date using template
+		dayOffset := m.selectedSlot / slotsPerDay
+		if m.selectedSlot < 0 {
+			dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+		}
+
+		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+		dateStr := fmt.Sprintf("%s %02d %d", monthName(selectedDate.Month()), selectedDate.Day(), selectedDate.Year())
+
+		// Add the untimed event using the template
+		lineNumber, err := m.client.AddEventFromTemplate(m.config.UntimedTemplate, dateStr, "")
+		if err != nil {
+			m.showMessage(fmt.Sprintf("Failed to add untimed reminder: %v", err))
+			return m, nil
+		}
+
+		// Launch editor at the new line
+		if len(m.config.RemindFiles) > 0 {
+			m.showMessage("Launching editor for new untimed reminder...")
+			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
+		}
+		return m, nil
+
+	case "new_template0", "new_template1", "new_template2", "new_template3", "new_template4", "new_template5", "new_template6", "new_template7", "new_template8", "new_template9":
+		// Get template number from action name
+		templateNum := -1
+		if len(action) > 12 { // "new_template" is 12 chars
+			templateNum = int(action[12] - '0')
+		}
+		if templateNum < 0 || templateNum > 9 {
+			m.showMessage("Invalid template number")
+			return m, nil
+		}
+
+		template := m.config.Templates[templateNum]
+		if template == "" {
+			m.showMessage(fmt.Sprintf("Template %d not configured", templateNum))
+			return m, nil
+		}
+
+		// Calculate date and time from selected slot
+		dayOffset := m.selectedSlot / slotsPerDay
+		localSlot := m.selectedSlot % slotsPerDay
+		if m.selectedSlot < 0 {
+			dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			localSlot = slotsPerDay + (m.selectedSlot % slotsPerDay)
+			if localSlot == slotsPerDay {
+				localSlot = 0
+				dayOffset++
+			}
+		}
+
+		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+		hour := localSlot
+		minute := 0
+		if m.timeIncrement == 30 {
+			hour = localSlot / 2
+			minute = (localSlot % 2) * 30
+		} else if m.timeIncrement == 15 {
+			hour = localSlot / 4
+			minute = (localSlot % 4) * 15
+		}
+
+		dateStr := fmt.Sprintf("%s %02d %d", monthName(selectedDate.Month()), selectedDate.Day(), selectedDate.Year())
+		timeStr := fmt.Sprintf("%02d:%02d", hour, minute)
+
+		// Some templates don't use time (untimed ones)
+		if strings.Contains(template, "%hour%") || strings.Contains(template, "AT ") {
+			// Template uses time
+			lineNumber, err := m.client.AddEventFromTemplate(template, dateStr, timeStr)
+			if err != nil {
+				m.showMessage(fmt.Sprintf("Failed to add from template: %v", err))
+				return m, nil
+			}
+			if len(m.config.RemindFiles) > 0 {
+				m.showMessage(fmt.Sprintf("Created from template %d...", templateNum))
+				return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
+			}
+		} else {
+			// Untimed template
+			lineNumber, err := m.client.AddEventFromTemplate(template, dateStr, "")
+			if err != nil {
+				m.showMessage(fmt.Sprintf("Failed to add from template: %v", err))
+				return m, nil
+			}
+			if len(m.config.RemindFiles) > 0 {
+				m.showMessage(fmt.Sprintf("Created from template %d...", templateNum))
+				return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
+			}
+		}
+		return m, nil
+
 	case "edit":
 		// Edit existing reminder or create new one
 		events := m.getEventsAtSlot(m.selectedSlot)
@@ -620,6 +725,54 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.selectedEventIndex = 0
 			m.mode = ViewEventSelector
 			return m, nil
+		}
+		return m, nil
+
+	case "new_untimed_dialog", "new_template4_dialog", "new_template6_dialog":
+		// For dialog versions, we'll use the same logic as non-dialog for now
+		// In the future, these could show a prompt for additional input
+		var templateNum int
+		var template string
+
+		switch action {
+		case "new_untimed_dialog":
+			template = m.config.UntimedTemplate
+		case "new_template4_dialog":
+			template = m.config.Templates[4]
+			templateNum = 4
+		case "new_template6_dialog":
+			template = m.config.Templates[6]
+			templateNum = 6
+		}
+
+		if template == "" {
+			if action == "new_untimed_dialog" {
+				m.showMessage("Untimed template not configured")
+			} else {
+				m.showMessage(fmt.Sprintf("Template %d not configured", templateNum))
+			}
+			return m, nil
+		}
+
+		// Calculate date from selected slot
+		dayOffset := m.selectedSlot / slotsPerDay
+		if m.selectedSlot < 0 {
+			dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+		}
+
+		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+		dateStr := fmt.Sprintf("%s %02d %d", monthName(selectedDate.Month()), selectedDate.Day(), selectedDate.Year())
+
+		// These are typically untimed templates
+		lineNumber, err := m.client.AddEventFromTemplate(template, dateStr, "")
+		if err != nil {
+			m.showMessage(fmt.Sprintf("Failed to add from template: %v", err))
+			return m, nil
+		}
+
+		if len(m.config.RemindFiles) > 0 {
+			m.showMessage("Launching editor...")
+			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
 		}
 		return m, nil
 	}
