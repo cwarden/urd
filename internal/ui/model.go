@@ -479,6 +479,24 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Adjust top slot proportionally
 		m.topSlot = m.topSlot * newSlotsPerDay / (24 * oldIncrement / 60)
 
+		// Ensure selected slot is visible after zoom
+		visibleSlots := m.height - 6
+		if visibleSlots < 10 {
+			visibleSlots = 10
+		}
+
+		// If selected slot is above visible area, scroll up
+		if m.selectedSlot < m.topSlot {
+			m.topSlot = m.selectedSlot
+		}
+		// If selected slot is below visible area, scroll down
+		if m.selectedSlot >= m.topSlot+visibleSlots {
+			m.topSlot = m.selectedSlot - visibleSlots/2 // Center it
+			if m.topSlot < 0 {
+				m.topSlot = 0
+			}
+		}
+
 	case "quick_add":
 		// Quick add event using natural language parsing
 		m.mode = ViewEventEditor
