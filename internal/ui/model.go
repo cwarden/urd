@@ -367,16 +367,16 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "scroll_down":
 		// Move down = next time slot (can roll to next day)
 		m.selectedSlot++
-		// Scroll if needed
-		if m.selectedSlot >= m.topSlot+visibleSlots-1 {
+		// Check if selected slot is still visible
+		if !m.isSlotVisible(m.selectedSlot) {
 			m.topSlot++
 		}
 
 	case "scroll_up":
 		// Move up = previous time slot (can roll to previous day)
 		m.selectedSlot--
-		// Scroll if needed
-		if m.selectedSlot < m.topSlot+1 {
+		// Check if selected slot is still visible
+		if !m.isSlotVisible(m.selectedSlot) {
 			m.topSlot--
 		}
 
@@ -1312,6 +1312,53 @@ func (m *Model) showMessage(msg string) {
 	m.messageTimer = time.AfterFunc(3*time.Second, func() {
 		m.message = ""
 	})
+}
+
+// isSlotVisible checks if a given slot is actually visible on screen
+func (m *Model) isSlotVisible(slot int) bool {
+	// Calculate slots per day based on time increment
+	slotsPerDay := 24
+	if m.timeIncrement == 30 {
+		slotsPerDay = 48
+	} else if m.timeIncrement == 15 {
+		slotsPerDay = 96
+	}
+
+	// Calculate visible slots
+	visibleSlots := m.height - 6 // Leave room for description and status
+	if visibleSlots < 10 {
+		visibleSlots = 10
+	}
+
+	// Simulate the same rendering logic to count actual visible slots
+	prevDay := -999
+	actualSlotsRendered := 0
+
+	for i := 0; i < visibleSlots && actualSlotsRendered < visibleSlots; i++ {
+		globalSlot := m.topSlot + actualSlotsRendered
+		dayOffset := globalSlot / slotsPerDay
+
+		// Handle negative slots
+		if globalSlot < 0 {
+			dayOffset = -1 + (globalSlot+1)/slotsPerDay
+		}
+
+		// Check if this is the slot we're looking for
+		if globalSlot == slot {
+			return true // Found it within the visible range
+		}
+
+		// Check for day change (which adds a separator line)
+		if dayOffset != prevDay {
+			prevDay = dayOffset
+			// Day separator doesn't count as a slot
+			continue
+		}
+
+		actualSlotsRendered++
+	}
+
+	return false // Slot is not visible
 }
 
 func (m *Model) tickCmd() tea.Cmd {
