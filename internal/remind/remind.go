@@ -326,6 +326,73 @@ func (c *Client) AddEvent(desc, dateStr, timeStr string) error {
 	return nil
 }
 
+// AddTimedEventFromTemplate creates a new timed reminder using the provided template
+// and appends it to the remind file at the current time slot
+func (c *Client) AddTimedEventFromTemplate(template, dateStr, timeStr string) (int, error) {
+	if len(c.Files) == 0 {
+		return 0, fmt.Errorf("no remind files configured")
+	}
+
+	// Use first file for new events
+	file := c.Files[0]
+
+	// Get current line count to know where we're adding the new entry
+	existingContent, err := os.ReadFile(file)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("failed to read remind file: %w", err)
+	}
+	lineNumber := strings.Count(string(existingContent), "\n") + 1
+
+	// Build the remind line
+	// The template is like: "REM %monname% %mday% %year% <++>AT %hour%:%min% +%dura%<++> DURATION %dura%:00<++> MSG %\"%<++>%\" [t()]%"
+	// We need to replace the placeholders
+	var remindLine string
+	if template != "" {
+		// Parse the date and time to get components
+		// dateStr is like "Aug 19 2025", timeStr is like "16:30"
+		parts := strings.Fields(dateStr)
+		monthName := parts[0] // "Aug"
+		dayStr := parts[1]    // "19"
+		yearStr := parts[2]   // "2025"
+
+		timeParts := strings.Split(timeStr, ":")
+		hourStr := timeParts[0] // "16"
+		minStr := timeParts[1]  // "30"
+
+		// Replace template placeholders
+		remindLine = template
+		remindLine = strings.ReplaceAll(remindLine, "%monname%", monthName)
+		remindLine = strings.ReplaceAll(remindLine, "%mday%", dayStr)
+		remindLine = strings.ReplaceAll(remindLine, "%year%", yearStr)
+		remindLine = strings.ReplaceAll(remindLine, "%hour%", hourStr)
+		remindLine = strings.ReplaceAll(remindLine, "%min%", minStr)
+		remindLine = strings.ReplaceAll(remindLine, "%dura%", "1") // Default 1 hour duration
+		// Don't replace %"% - it's a marker that should be preserved
+		// Just remove the trailing % at the end of the line
+		if strings.HasSuffix(remindLine, "%") {
+			remindLine = remindLine[:len(remindLine)-1]
+		}
+		remindLine = remindLine + "\n"
+	} else {
+		// Fallback to simple format
+		remindLine = fmt.Sprintf("REM %s AT %s MSG New reminder\n", dateStr, timeStr)
+	}
+
+	// Append to file
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open remind file: %w", err)
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(remindLine)
+	if err != nil {
+		return 0, fmt.Errorf("failed to write to remind file: %w", err)
+	}
+
+	return lineNumber, nil
+}
+
 func (c *Client) TestConnection() error {
 	// Test with a simple remind command that should always work
 	cmd := exec.Command(c.RemindPath, "-n")

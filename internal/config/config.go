@@ -93,9 +93,9 @@ func DefaultConfig() *Config {
 		ConfirmDelete: true,
 		WrapText:      true,
 
-		QuickTemplate:  "REM %s MSG %s",
-		TimedTemplate:  "REM %s AT %s MSG %s",
-		AllDayTemplate: "REM %s MSG %s",
+		QuickTemplate:  `REM %monname% %mday% %year% MSG %"<++>%" %`,
+		TimedTemplate:  `REM %monname% %mday% %year% <++>AT %hour%:%min% +%dura%<++> DURATION %dura%:00<++> MSG %"<++>%" %`,
+		AllDayTemplate: `REM %monname% %mday% %year% MSG %"<++>%" %`,
 
 		// Default editor commands - use vim with line numbers
 		EditOldCommand: "vim +%line% %file%",
@@ -188,8 +188,15 @@ func (c *Config) parseLine(line string) error {
 }
 
 func (c *Config) setVariable(name, value string) error {
-	// Remove quotes if present
-	value = strings.Trim(value, `"'`)
+	// Handle quoted strings - remove quotes and unescape
+	if (strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) ||
+		(strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`)) {
+		// Remove the surrounding quotes
+		value = value[1 : len(value)-1]
+		// Unescape any escaped quotes inside
+		value = strings.ReplaceAll(value, `\"`, `"`)
+		value = strings.ReplaceAll(value, `\'`, `'`)
+	}
 
 	switch name {
 	case "remind_file", "remind_files", "reminders_file":

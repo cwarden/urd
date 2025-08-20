@@ -442,6 +442,48 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case "t", "T":
+		// Add new timed reminder at selected time slot using template
+		// Calculate time from selected slot
+		dayOffset := m.selectedSlot / slotsPerDay
+		localSlot := m.selectedSlot % slotsPerDay
+		if m.selectedSlot < 0 {
+			dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			localSlot = slotsPerDay + (m.selectedSlot % slotsPerDay)
+			if localSlot == slotsPerDay {
+				localSlot = 0
+				dayOffset++
+			}
+		}
+
+		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+		hour := localSlot
+		minute := 0
+		if m.timeIncrement == 30 {
+			hour = localSlot / 2
+			minute = (localSlot % 2) * 30
+		} else if m.timeIncrement == 15 {
+			hour = localSlot / 4
+			minute = (localSlot % 4) * 15
+		}
+
+		// Format date and time for remind format (e.g., "Aug 19 2025")
+		dateStr := fmt.Sprintf("%s %02d %d", monthName(selectedDate.Month()), selectedDate.Day(), selectedDate.Year())
+		timeStr := fmt.Sprintf("%02d:%02d", hour, minute)
+
+		// Add the timed event using the template and get the line number
+		lineNumber, err := m.client.AddTimedEventFromTemplate(m.config.TimedTemplate, dateStr, timeStr)
+		if err != nil {
+			m.showMessage(fmt.Sprintf("Failed to add reminder: %v", err))
+			return m, nil
+		}
+
+		// Launch editor at the new line
+		if len(m.config.RemindFiles) > 0 {
+			m.showMessage("Launching editor for new timed reminder...")
+			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
+		}
+
 	}
 
 	return m, nil
@@ -613,6 +655,14 @@ func (m *Model) findEventFile(event remind.Event) (string, error) {
 	// In a more sophisticated implementation, we could parse the event ID
 	// or search through files to find the exact match
 	return m.config.RemindFiles[0], nil
+}
+
+// monthName returns the three-letter month name for remind format
+func monthName(m time.Month) string {
+	return []string{
+		"", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+	}[m]
 }
 
 func (m *Model) showMessage(msg string) {

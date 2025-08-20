@@ -22,6 +22,7 @@ func (m *Model) viewHelp() string {
 		"",
 		m.styles.Normal.Render("Actions:"),
 		m.styles.Help.Render("  n       - New event"),
+		m.styles.Help.Render("  t       - Add timed reminder at cursor"),
 		m.styles.Help.Render("  e       - Edit event at cursor"),
 		m.styles.Help.Render("  r       - Refresh"),
 		m.styles.Help.Render("  z       - Zoom (change time increment)"),
