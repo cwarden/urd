@@ -20,6 +20,7 @@ const (
 	ViewHourly ViewMode = iota
 	ViewHelp
 	ViewEventEditor
+	ViewEventSelector // For choosing between multiple events
 )
 
 type Model struct {
@@ -52,6 +53,10 @@ type Model struct {
 	editingEvent *remind.Event
 	inputBuffer  string
 	cursorPos    int
+
+	// Event selection state
+	eventChoices       []remind.Event
+	selectedEventIndex int
 
 	// Styles
 	styles Styles
@@ -197,6 +202,8 @@ func (m *Model) View() string {
 		return m.viewHelp()
 	case ViewEventEditor:
 		return m.viewEventEditor()
+	case ViewEventSelector:
+		return m.viewEventSelector()
 	default:
 		return m.viewHourlySchedule()
 	}
@@ -248,6 +255,8 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleHourlyKeys(msg)
 	case ViewEventEditor:
 		return m.handleEditorKeys(msg)
+	case ViewEventSelector:
+		return m.handleEventSelectorKeys(msg)
 	}
 
 	return m, nil
@@ -484,6 +493,135 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
 		}
 
+	case "enter", "return":
+		// Enter key - edit existing reminder or create new one
+		events := m.getEventsAtSlot(m.selectedSlot)
+
+		if len(events) == 0 {
+			// No events - create a new timed reminder
+			// Calculate time from selected slot
+			dayOffset := m.selectedSlot / slotsPerDay
+			localSlot := m.selectedSlot % slotsPerDay
+			if m.selectedSlot < 0 {
+				dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+				localSlot = slotsPerDay + (m.selectedSlot % slotsPerDay)
+				if localSlot == slotsPerDay {
+					localSlot = 0
+					dayOffset++
+				}
+			}
+
+			selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+			hour := localSlot
+			minute := 0
+			if m.timeIncrement == 30 {
+				hour = localSlot / 2
+				minute = (localSlot % 2) * 30
+			} else if m.timeIncrement == 15 {
+				hour = localSlot / 4
+				minute = (localSlot % 4) * 15
+			}
+
+			// Format date and time for remind format
+			dateStr := fmt.Sprintf("%s %02d %d", monthName(selectedDate.Month()), selectedDate.Day(), selectedDate.Year())
+			timeStr := fmt.Sprintf("%02d:%02d", hour, minute)
+
+			// Add the timed event using the template and get the line number
+			lineNumber, err := m.client.AddTimedEventFromTemplate(m.config.TimedTemplate, dateStr, timeStr)
+			if err != nil {
+				m.showMessage(fmt.Sprintf("Failed to add reminder: %v", err))
+				return m, nil
+			}
+
+			// Launch editor at the new line
+			if len(m.config.RemindFiles) > 0 {
+				m.showMessage("Creating new timed reminder...")
+				return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
+			}
+
+		} else if len(events) == 1 {
+			// Single event - edit it directly
+			event := events[0]
+			file, err := m.findEventFile(event)
+			if err != nil {
+				m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
+			} else {
+				m.showMessage("Launching editor...")
+				return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
+			}
+
+		} else {
+			// Multiple events - show selector
+			m.eventChoices = events
+			m.selectedEventIndex = 0
+			m.mode = ViewEventSelector
+			return m, nil
+		}
+
+	}
+
+	return m, nil
+}
+
+func (m *Model) handleEventSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q":
+		// Cancel selection and return to hourly view
+		m.mode = ViewHourly
+		m.eventChoices = nil
+		m.selectedEventIndex = 0
+		return m, nil
+
+	case "j", "down":
+		// Move down in the list
+		if m.selectedEventIndex < len(m.eventChoices)-1 {
+			m.selectedEventIndex++
+		}
+		return m, nil
+
+	case "k", "up":
+		// Move up in the list
+		if m.selectedEventIndex > 0 {
+			m.selectedEventIndex--
+		}
+		return m, nil
+
+	case "enter", "return":
+		// Select the current event and edit it
+		if m.selectedEventIndex < len(m.eventChoices) {
+			event := m.eventChoices[m.selectedEventIndex]
+			file, err := m.findEventFile(event)
+			if err != nil {
+				m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
+				m.mode = ViewHourly
+			} else {
+				m.showMessage("Launching editor...")
+				m.mode = ViewHourly
+				m.eventChoices = nil
+				m.selectedEventIndex = 0
+				return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
+			}
+		}
+		return m, nil
+
+	// Number keys for quick selection
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		index := int(msg.String()[0] - '1')
+		if index < len(m.eventChoices) {
+			event := m.eventChoices[index]
+			file, err := m.findEventFile(event)
+			if err != nil {
+				m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
+				m.mode = ViewHourly
+			} else {
+				m.showMessage("Launching editor...")
+				m.mode = ViewHourly
+				m.eventChoices = nil
+				m.selectedEventIndex = 0
+				return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
+			}
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -643,6 +781,67 @@ func (m *Model) getEventAtSlot(slot int) *remind.Event {
 	}
 
 	return nil
+}
+
+// getEventsAtSlot returns all events at the specified time slot
+func (m *Model) getEventsAtSlot(slot int) []remind.Event {
+	var events []remind.Event
+
+	// Calculate slots per day based on increment
+	slotsPerDay := 24
+	if m.timeIncrement == 30 {
+		slotsPerDay = 48
+	} else if m.timeIncrement == 15 {
+		slotsPerDay = 96
+	}
+
+	// Calculate day offset and local slot
+	dayOffset := slot / slotsPerDay
+	localSlot := slot % slotsPerDay
+	if slot < 0 {
+		dayOffset = -1 + (slot+1)/slotsPerDay
+		localSlot = slotsPerDay + (slot % slotsPerDay)
+		if localSlot == slotsPerDay {
+			localSlot = 0
+			dayOffset++
+		}
+	}
+
+	// Calculate the target date
+	targetDate := m.selectedDate.AddDate(0, 0, dayOffset)
+
+	// Find all events at this time slot
+	for _, event := range m.events {
+		// Check if event is on the target date
+		if event.Date.Year() != targetDate.Year() ||
+			event.Date.Month() != targetDate.Month() ||
+			event.Date.Day() != targetDate.Day() {
+			continue
+		}
+
+		// For timed events, check if it matches the time slot
+		if event.Time != nil {
+			eventHour := event.Time.Hour()
+			eventMinute := event.Time.Minute()
+
+			// Calculate which slot this event should be in
+			eventSlot := eventHour
+			if m.timeIncrement == 30 {
+				eventSlot = eventHour*2 + eventMinute/30
+			} else if m.timeIncrement == 15 {
+				eventSlot = eventHour*4 + eventMinute/15
+			}
+
+			if eventSlot == localSlot {
+				events = append(events, event)
+			}
+		} else {
+			// For untimed events, add them all for this day
+			events = append(events, event)
+		}
+	}
+
+	return events
 }
 
 // findEventFile attempts to locate which remind file contains the given event
