@@ -39,8 +39,8 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("Default key bindings should not be empty")
 	}
 
-	if cfg.KeyBindings["quit"] != "q" {
-		t.Errorf("Wrong quit key binding: %s", cfg.KeyBindings["quit"])
+	if cfg.KeyBindings["Q"] != "quit" {
+		t.Errorf("Wrong quit key binding: %s", cfg.KeyBindings["Q"])
 	}
 }
 
@@ -88,7 +88,7 @@ func TestParseLine(t *testing.T) {
 		{
 			line: "bind j next_day",
 			check: func(c *Config) bool {
-				return c.KeyBindings["next_day"] == "j"
+				return c.KeyBindings["j"] == "next_day"
 			},
 			expected: true,
 			hasError: false,
@@ -283,8 +283,8 @@ color selected reverse
 		t.Errorf("Wrong refresh rate: %v", cfg.RefreshRate)
 	}
 
-	if cfg.KeyBindings["quit"] != "q" {
-		t.Errorf("Wrong quit binding: %s", cfg.KeyBindings["quit"])
+	if cfg.KeyBindings["q"] != "quit" {
+		t.Errorf("Wrong quit binding: %s", cfg.KeyBindings["q"])
 	}
 
 	if cfg.Colors["today"] != "cyan" {

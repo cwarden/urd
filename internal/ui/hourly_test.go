@@ -155,7 +155,7 @@ func TestEventRendering(t *testing.T) {
 		eventCount := 0
 		lines := splitLines(output)
 		for _, line := range lines {
-			if contains(line, "Move Car for Street Sweeping") {
+			if containsString(line, "Move Car for Street Sweeping") {
 				eventCount++
 				t.Logf("Found event in line: %s", line)
 			}
@@ -186,7 +186,7 @@ func splitLines(s string) []string {
 	return lines
 }
 
-func contains(s, substr string) bool {
+func containsString(s, substr string) bool {
 	// Simple substring search that ignores ANSI codes
 	// This is a simplified version - in production you'd strip ANSI properly
 	for i := 0; i <= len(s)-len(substr); i++ {

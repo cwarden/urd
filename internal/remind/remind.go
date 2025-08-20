@@ -717,3 +717,65 @@ func (c *Client) RemoveEvent(event Event) error {
 
 	return nil
 }
+
+// AddQuickEvent parses natural language event description and adds it to remind file
+func (c *Client) AddQuickEvent(eventDesc string) (int, error) {
+	if len(c.Files) == 0 {
+		return 0, fmt.Errorf("no remind files configured")
+	}
+
+	// Parse the natural language description using the time parser
+	parser := &TimeParser{Now: time.Now(), Location: time.Local}
+	parsed, err := parser.Parse(eventDesc)
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse event description: %w", err)
+	}
+
+	// Use first file for new events
+	file := c.Files[0]
+
+	// Get current line count to know where we are adding the new entry
+	existingContent, err := os.ReadFile(file)
+	if err != nil && !os.IsNotExist(err) {
+		return 0, fmt.Errorf("failed to read remind file: %w", err)
+	}
+	lineNumber := strings.Count(string(existingContent), "\n") + 1
+
+	// Format the remind line based on parsing results
+	var remindLine string
+	dateStr := parsed.Date.Format("Jan 2 2006")
+	description := strings.TrimSpace(parsed.Text)
+	if description == "" {
+		description = "New reminder"
+	}
+
+	if parsed.HasTime {
+		timeStr := parsed.Time.Format("15:04")
+		if parsed.Duration > 0 {
+			// Calculate duration in hours and minutes
+			totalMin := int(parsed.Duration.Minutes())
+			hours := totalMin / 60
+			minutes := totalMin % 60
+			remindLine = fmt.Sprintf("REM %s AT %s DURATION %d:%.2d MSG %s\n",
+				dateStr, timeStr, hours, minutes, description)
+		} else {
+			remindLine = fmt.Sprintf("REM %s AT %s MSG %s\n", dateStr, timeStr, description)
+		}
+	} else {
+		remindLine = fmt.Sprintf("REM %s MSG %s\n", dateStr, description)
+	}
+
+	// Append to file
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	if err != nil {
+		return 0, fmt.Errorf("failed to open remind file: %w", err)
+	}
+	defer f.Close()
+
+	_, err = f.WriteString(remindLine)
+	if err != nil {
+		return 0, fmt.Errorf("failed to write to remind file: %w", err)
+	}
+
+	return lineNumber, nil
+}

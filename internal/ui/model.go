@@ -283,14 +283,16 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 		case "i":
-			// Toggle showing event IDs (only if not bound to something else)
-			m.showEventIDs = !m.showEventIDs
-			if m.showEventIDs {
-				m.showMessage("Showing event IDs")
-			} else {
-				m.showMessage("Hiding event IDs")
+			// Toggle showing event IDs (only if not bound to something else and not in editor mode)
+			if m.mode != ViewEventEditor {
+				m.showEventIDs = !m.showEventIDs
+				if m.showEventIDs {
+					m.showMessage("Showing event IDs")
+				} else {
+					m.showMessage("Hiding event IDs")
+				}
+				return m, nil
 			}
-			return m, nil
 		}
 	}
 
@@ -478,36 +480,13 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.topSlot = m.topSlot * newSlotsPerDay / (24 * oldIncrement / 60)
 
 	case "quick_add":
-		// New event at selected time (quick add)
+		// Quick add event using natural language parsing
 		m.mode = ViewEventEditor
 		m.editingEvent = nil
 
-		// Calculate time from selected slot
-		dayOffset := m.selectedSlot / slotsPerDay
-		localSlot := m.selectedSlot % slotsPerDay
-		if m.selectedSlot < 0 {
-			dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
-			localSlot = slotsPerDay + (m.selectedSlot % slotsPerDay)
-			if localSlot == slotsPerDay {
-				localSlot = 0
-				dayOffset++
-			}
-		}
-
-		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
-		hour := localSlot
-		minute := 0
-		if m.timeIncrement == 30 {
-			hour = localSlot / 2
-			minute = (localSlot % 2) * 30
-		} else if m.timeIncrement == 15 {
-			hour = localSlot / 4
-			minute = (localSlot % 4) * 15
-		}
-
-		timeStr := fmt.Sprintf("%02d:%02d", hour, minute)
-		m.inputBuffer = fmt.Sprintf("%s %s ", selectedDate.Format("2006-01-02"), timeStr)
-		m.cursorPos = len(m.inputBuffer)
+		// Clear input buffer for natural language input
+		m.inputBuffer = ""
+		m.cursorPos = 0
 
 	case "edit_any":
 		// Edit event at selected time slot
@@ -1053,25 +1032,21 @@ func (m *Model) handleEditorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyEnter:
-		// Parse and save event
+		// Parse and save event using natural language processing
 		if m.inputBuffer != "" {
-			parsed, err := m.parser.Parse(m.inputBuffer)
+			// Use the new quick event method with natural language parsing
+			lineNumber, err := m.client.AddQuickEvent(m.inputBuffer)
 			if err == nil {
-				dateStr := parsed.Date.Format("2006/01/02")
-				timeStr := ""
-				if parsed.HasTime {
-					timeStr = parsed.Time.Format("15:04")
-				}
+				m.showMessage("Event added - launching editor...")
+				m.mode = ViewHourly
+				m.loadEvents()
 
-				err = m.client.AddEvent(parsed.Text, dateStr, timeStr)
-				if err == nil {
-					m.showMessage("Event added")
-					m.loadEvents()
-				} else {
-					m.showMessage(fmt.Sprintf("Error: %v", err))
+				// Launch editor for the newly created event
+				if len(m.config.RemindFiles) > 0 {
+					return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
 				}
 			} else {
-				m.showMessage(fmt.Sprintf("Parse error: %v", err))
+				m.showMessage(fmt.Sprintf("Error: %v", err))
 			}
 		}
 		m.mode = ViewHourly
@@ -1098,6 +1073,11 @@ func (m *Model) handleEditorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inputBuffer = m.inputBuffer[:m.cursorPos] + string(r) + m.inputBuffer[m.cursorPos:]
 			m.cursorPos++
 		}
+
+	case tea.KeySpace:
+		// Handle space explicitly
+		m.inputBuffer = m.inputBuffer[:m.cursorPos] + " " + m.inputBuffer[m.cursorPos:]
+		m.cursorPos++
 	}
 
 	return m, nil

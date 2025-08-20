@@ -261,12 +261,13 @@ func (m *Model) viewEventSelector() string {
 func (m *Model) viewEventEditor() string {
 	var sections []string
 
-	header := m.styles.Header.Render("New Event")
+	header := m.styles.Header.Render("Quick Add Event")
 	sections = append(sections, header)
 	sections = append(sections, "")
 
-	prompt := m.styles.Normal.Render("Enter event (e.g., 'tomorrow 2pm Meeting with team'):")
+	prompt := m.styles.Normal.Render("event description:")
 	sections = append(sections, prompt)
+	sections = append(sections, m.styles.Help.Render("Examples: 'tomorrow 2pm Meeting' or 'next friday Lunch with Jim'"))
 
 	// Show input with cursor
 	input := m.inputBuffer
