@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -431,21 +430,13 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
 			} else {
 				m.showMessage("Launching editor...")
-				return m, tea.Sequence(
-					tea.ExitAltScreen,
-					m.editCmd(m.config.EditOldCommand, file, event.LineNumber),
-					tea.EnterAltScreen,
-				)
+				return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
 			}
 		} else {
 			// No event at this slot - edit file for new event
 			if len(m.config.RemindFiles) > 0 {
 				m.showMessage("Launching editor for new event...")
-				return m, tea.Sequence(
-					tea.ExitAltScreen,
-					m.editCmd(m.config.EditNewCommand, m.config.RemindFiles[0], 0),
-					tea.EnterAltScreen,
-				)
+				return m, m.editCmd(m.config.EditNewCommand, m.config.RemindFiles[0], 0)
 			} else {
 				m.showMessage("No remind files configured")
 			}
@@ -640,31 +631,32 @@ func (m *Model) tickCmd() tea.Cmd {
 	})
 }
 
-// editCmd launches an external editor and returns a command that will send a message when complete
+// editCmd launches an external editor using tea.ExecProcess for proper terminal handling
 func (m *Model) editCmd(command, filePath string, lineNumber int) tea.Cmd {
-	return func() tea.Msg {
-		// Expand variables in the command
-		expandedCommand := m.expandCommandVariables(command, filePath, lineNumber)
+	// Expand variables in the command
+	expandedCommand := m.expandCommandVariables(command, filePath, lineNumber)
 
-		// Parse the command into program and arguments
-		parts, err := m.parseCommand(expandedCommand)
-		if err != nil {
+	// Parse the command into program and arguments
+	parts, err := m.parseCommand(expandedCommand)
+	if err != nil {
+		return func() tea.Msg {
 			return editorFinishedMsg{err: fmt.Errorf("failed to parse edit command: %w", err)}
 		}
+	}
 
-		if len(parts) == 0 {
+	if len(parts) == 0 {
+		return func() tea.Msg {
 			return editorFinishedMsg{err: fmt.Errorf("empty edit command")}
 		}
-
-		// Create and run the command
-		cmd := exec.Command(parts[0], parts[1:]...)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-
-		err = cmd.Run()
-		return editorFinishedMsg{err: err}
 	}
+
+	// Create the command
+	cmd := exec.Command(parts[0], parts[1:]...)
+
+	// Use tea.ExecProcess for proper terminal handling
+	return tea.ExecProcess(cmd, func(err error) tea.Msg {
+		return editorFinishedMsg{err: err}
+	})
 }
 
 // expandCommandVariables replaces template variables in the command string
