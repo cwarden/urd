@@ -128,16 +128,7 @@ func (m *Model) renderSchedule() string {
 			columnEvents := make(map[int]string)
 			maxColumn := 0
 
-			// Calculate available width for event text
-			scheduleWidth := m.width * 2 / 3
-			timeWidth := 7 // "HH:MM  "
-			availableWidth := scheduleWidth - timeWidth
-			// Allow more space per column, but still limit for readability
-			maxLen := 35
-			if availableWidth > 80 {
-				maxLen = 45
-			}
-
+			// First pass: figure out how many columns we have
 			for _, event := range events {
 				column := eventColumns[event.ID]
 				if column > maxColumn {
@@ -149,9 +140,6 @@ func (m *Model) renderSchedule() string {
 					// Show event ID for debugging
 					eventStr = fmt.Sprintf("[%s] %s", event.ID, event.Description)
 				}
-				if len(eventStr) > maxLen {
-					eventStr = eventStr[:maxLen-3] + "..."
-				}
 
 				// Only store the first event for each column (shouldn't have duplicates)
 				if _, exists := columnEvents[column]; !exists {
@@ -159,13 +147,38 @@ func (m *Model) renderSchedule() string {
 				}
 			}
 
+			// Calculate available width for event text
+			scheduleWidth := m.width * 2 / 3
+			timeWidth := 7 // "HH:MM  "
+			availableWidth := scheduleWidth - timeWidth
+
+			// Calculate space per column based on actual number of columns
+			numColumns := maxColumn + 1
+			padding := 2 // Space between columns
+			columnWidth := availableWidth / numColumns
+			if numColumns > 1 {
+				columnWidth = (availableWidth - (padding * (numColumns - 1))) / numColumns
+			}
+
+			// Only truncate if necessary
+			maxLen := columnWidth
+			if maxLen < 10 {
+				maxLen = 10 // Minimum readable width
+			}
+
+			// Now truncate events that are too long for their column
+			for col, eventStr := range columnEvents {
+				if len(eventStr) > maxLen {
+					columnEvents[col] = eventStr[:maxLen-3] + "..."
+				}
+			}
+
 			// Build the line with proper column spacing
 			currentPos := len(timeStr) + 2
-			columnWidth := maxLen + 2 // Add some padding between columns
 			for col := 0; col <= maxColumn; col++ {
 				if eventStr, exists := columnEvents[col]; exists {
 					// Calculate where this column should start
-					targetPos := len(timeStr) + 2 + (col * columnWidth)
+					targetPos := len(timeStr) + 2 + (col * (maxLen + padding))
 					// Add padding to reach the target position
 					if targetPos > currentPos {
 						line += strings.Repeat(" ", targetPos-currentPos)

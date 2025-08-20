@@ -130,7 +130,8 @@ func TestMultipleEventsWithSameDescription(t *testing.T) {
 	// Find the 06:30 line and verify both Move Car events are shown (they have different IDs)
 	for _, line := range lines {
 		if strings.Contains(line, "06:30") || strings.Contains(line, "06:45") {
-			moveCarInLine := strings.Count(line, "Move Car for Street Sweeping")
+			// Check for "Move Car" text (may be truncated when 4 events in one slot)
+			moveCarInLine := strings.Count(line, "Move Car")
 			// We expect 2 because we have two different events with same description
 			if moveCarInLine != 2 {
 				t.Errorf("Line should contain 'Move Car' 2 times (different IDs), got %d times: %s", moveCarInLine, line)
@@ -138,7 +139,8 @@ func TestMultipleEventsWithSameDescription(t *testing.T) {
 		}
 
 		if strings.Contains(line, "11:00") {
-			salesforceInLine := strings.Count(line, "Salesforce Team Meeting")
+			// Check for "Salesforce" text (may be truncated when multiple events in one slot)
+			salesforceInLine := strings.Count(line, "Salesforce")
 			// We expect 2 because we have two different events with same description
 			if salesforceInLine != 2 {
 				t.Errorf("Line should contain 'Salesforce' 2 times (different IDs), got %d times: %s", salesforceInLine, line)
