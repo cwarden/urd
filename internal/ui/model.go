@@ -151,6 +151,7 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		tea.EnterAltScreen,
 		m.tickCmd(),
+		m.timeUpdateCmd(),
 	)
 }
 
@@ -171,6 +172,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.tickCmd()
 		}
 		return m, nil
+
+	case timeUpdateMsg:
+		// Update current time display every minute
+		return m, m.timeUpdateCmd()
 
 	case eventLoadedMsg:
 		m.events = msg.events
@@ -1315,6 +1320,12 @@ func (m *Model) tickCmd() tea.Cmd {
 	})
 }
 
+func (m *Model) timeUpdateCmd() tea.Cmd {
+	return tea.Every(time.Minute, func(time.Time) tea.Msg {
+		return timeUpdateMsg{}
+	})
+}
+
 // editCmd launches an external editor using tea.ExecProcess for proper terminal handling
 func (m *Model) editCmd(command, filePath string, lineNumber int) tea.Cmd {
 	// Expand variables in the command
@@ -1394,6 +1405,7 @@ func (m *Model) parseCommand(command string) ([]string, error) {
 
 // Message types
 type tickMsg struct{}
+type timeUpdateMsg struct{}
 type messageTimeoutMsg struct{}
 type eventLoadedMsg struct {
 	events []remind.Event

@@ -668,7 +668,8 @@ func (m *Model) renderSelectedSlotEvents() string {
 
 // renderScheduleStatusBar renders the status bar for schedule view
 func (m *Model) renderScheduleStatusBar() string {
-	dateStr := m.selectedDate.Format("Monday, January 2 at 15:04")
+	now := time.Now()
+	dateStr := now.Format("Monday, January 2 at 15:04")
 
 	left := fmt.Sprintf(" Currently: %s", dateStr)
 
