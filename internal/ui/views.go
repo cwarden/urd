@@ -8,30 +8,72 @@ import (
 )
 
 func (m *Model) viewHelp() string {
+	// Create a map of actions to descriptions
+	actionDescriptions := map[string]string{
+		"scroll_down":   "Next time slot",
+		"scroll_up":     "Previous time slot",
+		"previous_day":  "Previous day",
+		"next_day":      "Next day",
+		"previous_week": "Previous week",
+		"next_week":     "Next week",
+		"home":          "Go to current time",
+		"zoom":          "Zoom (change time increment)",
+		"edit":          "Edit/create reminder",
+		"edit_any":      "Edit reminder file",
+		"new_timed":     "Add timed reminder",
+		"quick_add":     "Quick add event",
+		"refresh":       "Refresh",
+		"help":          "Toggle help",
+		"quit":          "Quit",
+	}
+
+	// Build help text using configured key bindings
 	help := []string{
 		m.styles.Header.Render("Urd Help"),
 		"",
 		m.styles.Normal.Render("Navigation:"),
-		m.styles.Help.Render("  j/↓     - Next time slot"),
-		m.styles.Help.Render("  k/↑     - Previous time slot"),
-		m.styles.Help.Render("  h/H/←   - Previous day"),
-		m.styles.Help.Render("  l/L/→   - Next day"),
-		m.styles.Help.Render("  K       - Previous week"),
-		m.styles.Help.Render("  J       - Next week"),
-		m.styles.Help.Render("  o       - Go to current time"),
-		"",
-		m.styles.Normal.Render("Actions:"),
-		m.styles.Help.Render("  n       - New event"),
-		m.styles.Help.Render("  t       - Add timed reminder at cursor"),
-		m.styles.Help.Render("  e       - Edit event at cursor"),
-		m.styles.Help.Render("  r       - Refresh"),
-		m.styles.Help.Render("  z       - Zoom (change time increment)"),
-		m.styles.Help.Render("  i       - Toggle event IDs"),
-		m.styles.Help.Render("  ?       - Toggle help"),
-		m.styles.Help.Render("  q       - Quit"),
-		"",
-		m.styles.Help.Render("Press any key to return..."),
 	}
+
+	// Add navigation keys
+	navActions := []string{"scroll_down", "scroll_up", "previous_day", "next_day", "previous_week", "next_week", "home"}
+	for _, action := range navActions {
+		// Find all keys bound to this action
+		var keys []string
+		for key, boundAction := range m.config.KeyBindings {
+			if boundAction == action {
+				keys = append(keys, key)
+			}
+		}
+		if len(keys) > 0 {
+			// Show first key binding for this action
+			help = append(help, m.styles.Help.Render(fmt.Sprintf("  %-10s - %s", keys[0], actionDescriptions[action])))
+		}
+	}
+
+	help = append(help, "")
+	help = append(help, m.styles.Normal.Render("Actions:"))
+
+	// Add action keys
+	actionKeys := []string{"quick_add", "new_timed", "edit", "edit_any", "refresh", "zoom", "help", "quit"}
+	for _, action := range actionKeys {
+		// Find all keys bound to this action
+		var keys []string
+		for key, boundAction := range m.config.KeyBindings {
+			if boundAction == action {
+				keys = append(keys, key)
+			}
+		}
+		if len(keys) > 0 {
+			// Show first key binding for this action
+			help = append(help, m.styles.Help.Render(fmt.Sprintf("  %-10s - %s", keys[0], actionDescriptions[action])))
+		}
+	}
+
+	// Add hard-coded keys
+	help = append(help, m.styles.Help.Render("  i          - Toggle event IDs"))
+
+	help = append(help, "")
+	help = append(help, m.styles.Help.Render("Press any key to return..."))
 
 	return lipgloss.JoinVertical(lipgloss.Left, help...)
 }

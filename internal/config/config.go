@@ -71,20 +71,24 @@ func DefaultConfig() *Config {
 		},
 
 		KeyBindings: map[string]string{
-			"quit":         "q",
-			"help":         "?",
-			"today":        "t",
-			"refresh":      "r",
-			"new_event":    "n",
-			"edit_event":   "e",
-			"delete_event": "d",
-			"next_day":     "l",
-			"prev_day":     "h",
-			"next_week":    "j",
-			"prev_week":    "k",
-			"next_month":   ">",
-			"prev_month":   "<",
-			"goto_date":    "g",
+			// Default key -> action mappings
+			"j":       "scroll_down",
+			"k":       "scroll_up",
+			"<down>":  "scroll_down",
+			"<up>":    "scroll_up",
+			"L":       "next_day",
+			"H":       "previous_day",
+			"J":       "next_week",
+			"K":       "previous_week",
+			"o":       "home",
+			"z":       "zoom",
+			"<enter>": "edit",
+			"e":       "edit_any",
+			"t":       "new_timed",
+			"q":       "quick_add",
+			"\\Cl":    "refresh",
+			"?":       "help",
+			"Q":       "quit",
 		},
 
 		StartupView:   "month",
@@ -171,9 +175,17 @@ func (c *Config) parseLine(line string) error {
 	}
 
 	// Handle bind commands: bind key action
-	bindRe := regexp.MustCompile(`^bind\s+(\S+)\s+(\S+)$`)
+	// Keys can be quoted like "<down>" or unquoted like j
+	bindRe := regexp.MustCompile(`^bind\s+("[^"]+"|\S+)\s+(\S+)$`)
 	if matches := bindRe.FindStringSubmatch(line); matches != nil {
-		c.KeyBindings[matches[2]] = matches[1]
+		key := matches[1]
+		// Remove quotes if present
+		if strings.HasPrefix(key, `"`) && strings.HasSuffix(key, `"`) {
+			key = key[1 : len(key)-1]
+		}
+		action := matches[2]
+		// Store as key -> action mapping
+		c.KeyBindings[key] = action
 		return nil
 	}
 

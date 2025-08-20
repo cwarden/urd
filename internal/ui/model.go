@@ -210,22 +210,54 @@ func (m *Model) View() string {
 }
 
 func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Global keys
-	switch msg.String() {
-	case "ctrl+c", "q":
+	// Check configured key bindings
+	key := msg.String()
+
+	// Handle special key representations
+	switch key {
+	case "up":
+		key = "<up>"
+	case "down":
+		key = "<down>"
+	case "left":
+		key = "<left>"
+	case "right":
+		key = "<right>"
+	case "enter":
+		key = "<enter>"
+	case "tab":
+		key = "<tab>"
+	case "backspace":
+		key = "<backspace>"
+	case "esc":
+		key = "<esc>"
+	case "pgup":
+		key = "<pageup>"
+	case "pgdown":
+		key = "<pagedown>"
+	case "home":
+		key = "<home>"
+	case "ctrl+l":
+		key = "\\Cl"
+	}
+
+	// Look up the action for this key
+	action := m.getActionForKey(key)
+
+	// Global keys that work in all modes
+	switch action {
+	case "quit":
 		if m.mode != ViewEventEditor {
 			return m, tea.Quit
 		}
-
-	case "?":
+	case "help":
 		if m.mode == ViewHelp {
 			m.mode = ViewHourly
 		} else {
 			m.mode = ViewHelp
 		}
 		return m, nil
-
-	case "r":
+	case "refresh":
 		m.loadEvents()
 		now := time.Now()
 		currentTimeSlot := now.Hour()
@@ -236,7 +268,14 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.showMessage(fmt.Sprintf("Refreshed - Now: %02d:%02d, slot=%d, selected=%d", now.Hour(), now.Minute(), currentTimeSlot, m.selectedSlot))
 		return m, nil
+	}
 
+	// Handle hard-coded keys
+	switch key {
+	case "ctrl+c":
+		if m.mode != ViewEventEditor {
+			return m, tea.Quit
+		}
 	case "i", "I":
 		// Toggle showing event IDs
 		m.showEventIDs = !m.showEventIDs
@@ -246,7 +285,6 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.showMessage("Hiding event IDs")
 		}
 		return m, nil
-
 	}
 
 	// Mode-specific handling
@@ -276,8 +314,34 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		visibleSlots = 10
 	}
 
-	switch msg.String() {
-	case "j", "down":
+	// Get the key string and action
+	key := msg.String()
+	// Handle special key representations
+	switch key {
+	case "up":
+		key = "<up>"
+	case "down":
+		key = "<down>"
+	case "left":
+		key = "<left>"
+	case "right":
+		key = "<right>"
+	case "enter":
+		key = "<enter>"
+	case "tab":
+		key = "<tab>"
+	case "pgup":
+		key = "<pageup>"
+	case "pgdown":
+		key = "<pagedown>"
+	case "home":
+		key = "<home>"
+	}
+
+	action := m.getActionForKey(key)
+
+	switch action {
+	case "scroll_down":
 		// Move down = next time slot (can roll to next day)
 		m.selectedSlot++
 		// Scroll if needed
@@ -285,7 +349,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.topSlot++
 		}
 
-	case "k", "up":
+	case "scroll_up":
 		// Move up = previous time slot (can roll to previous day)
 		m.selectedSlot--
 		// Scroll if needed
@@ -293,35 +357,35 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.topSlot--
 		}
 
-	case "l", "right", "L":
+	case "next_day":
 		// Next day - jump forward by one day
 		m.selectedDate = m.selectedDate.AddDate(0, 0, 1)
 		if m.needsEventReload() {
 			m.loadEventsForSchedule()
 		}
 
-	case "h", "left", "H":
+	case "previous_day":
 		// Previous day - jump back by one day
 		m.selectedDate = m.selectedDate.AddDate(0, 0, -1)
 		if m.needsEventReload() {
 			m.loadEventsForSchedule()
 		}
 
-	case "J":
+	case "next_week":
 		// Next week - jump forward by one week
 		m.selectedDate = m.selectedDate.AddDate(0, 0, 7)
 		if m.needsEventReload() {
 			m.loadEventsForSchedule()
 		}
 
-	case "K":
+	case "previous_week":
 		// Previous week - jump back by one week
 		m.selectedDate = m.selectedDate.AddDate(0, 0, -7)
 		if m.needsEventReload() {
 			m.loadEventsForSchedule()
 		}
 
-	case "o":
+	case "home":
 		// Go to current time - start fresh
 		now := time.Now()
 		m.selectedDate = now
@@ -344,7 +408,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Show debug message
 		m.showMessage(fmt.Sprintf("Now: %02d:%02d, slot=%d, top=%d", now.Hour(), now.Minute(), m.selectedSlot, m.topSlot))
 
-	case "z":
+	case "zoom":
 		// Zoom - cycle through time increments
 		// Convert current slot to time
 		dayOffset := m.selectedSlot / slotsPerDay
@@ -397,8 +461,8 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Adjust top slot proportionally
 		m.topSlot = m.topSlot * newSlotsPerDay / (24 * oldIncrement / 60)
 
-	case "n":
-		// New event at selected time
+	case "quick_add":
+		// New event at selected time (quick add)
 		m.mode = ViewEventEditor
 		m.editingEvent = nil
 
@@ -429,7 +493,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inputBuffer = fmt.Sprintf("%s %s ", selectedDate.Format("2006-01-02"), timeStr)
 		m.cursorPos = len(m.inputBuffer)
 
-	case "e", "E":
+	case "edit_any":
 		// Edit event at selected time slot
 		event := m.getEventAtSlot(m.selectedSlot)
 		if event != nil {
@@ -451,7 +515,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-	case "t", "T":
+	case "new_timed":
 		// Add new timed reminder at selected time slot using template
 		// Calculate time from selected slot
 		dayOffset := m.selectedSlot / slotsPerDay
@@ -493,8 +557,8 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
 		}
 
-	case "enter", "return":
-		// Enter key - edit existing reminder or create new one
+	case "edit":
+		// Edit existing reminder or create new one
 		events := m.getEventsAtSlot(m.selectedSlot)
 
 		if len(events) == 0 {
@@ -557,36 +621,53 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.mode = ViewEventSelector
 			return m, nil
 		}
-
+		return m, nil
 	}
 
 	return m, nil
 }
 
 func (m *Model) handleEventSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "q":
+	// Get the key string and action
+	key := msg.String()
+	// Handle special key representations
+	switch key {
+	case "up":
+		key = "<up>"
+	case "down":
+		key = "<down>"
+	case "enter":
+		key = "<enter>"
+	case "esc":
+		key = "<esc>"
+	}
+
+	action := m.getActionForKey(key)
+
+	// Also check the raw key for actions
+	switch action {
+	case "entry_cancel":
 		// Cancel selection and return to hourly view
 		m.mode = ViewHourly
 		m.eventChoices = nil
 		m.selectedEventIndex = 0
 		return m, nil
 
-	case "j", "down":
+	case "scroll_down":
 		// Move down in the list
 		if m.selectedEventIndex < len(m.eventChoices)-1 {
 			m.selectedEventIndex++
 		}
 		return m, nil
 
-	case "k", "up":
+	case "scroll_up":
 		// Move up in the list
 		if m.selectedEventIndex > 0 {
 			m.selectedEventIndex--
 		}
 		return m, nil
 
-	case "enter", "return":
+	case "entry_complete", "edit":
 		// Select the current event and edit it
 		if m.selectedEventIndex < len(m.eventChoices) {
 			event := m.eventChoices[m.selectedEventIndex]
@@ -601,6 +682,30 @@ func (m *Model) handleEventSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.selectedEventIndex = 0
 				return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
 			}
+		}
+		return m, nil
+	}
+
+	// Handle special cases
+	switch key {
+	case "<esc>", "q":
+		// Cancel selection and return to hourly view
+		m.mode = ViewHourly
+		m.eventChoices = nil
+		m.selectedEventIndex = 0
+		return m, nil
+
+	case "j", "<down>":
+		// Move down in the list
+		if m.selectedEventIndex < len(m.eventChoices)-1 {
+			m.selectedEventIndex++
+		}
+		return m, nil
+
+	case "k", "<up>":
+		// Move up in the list
+		if m.selectedEventIndex > 0 {
+			m.selectedEventIndex--
 		}
 		return m, nil
 
@@ -862,6 +967,15 @@ func monthName(m time.Month) string {
 		"", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
 		"Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 	}[m]
+}
+
+// getActionForKey returns the action associated with a key binding
+func (m *Model) getActionForKey(key string) string {
+	// Check if there's a configured binding for this key
+	if action, ok := m.config.KeyBindings[key]; ok {
+		return action
+	}
+	return ""
 }
 
 func (m *Model) showMessage(msg string) {

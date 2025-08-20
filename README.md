@@ -39,7 +39,7 @@ make install
 # Launch interactive TUI
 urd
 
-# List today's events  
+# List today's events
 urd --list
 
 # Use specific config file
@@ -53,38 +53,35 @@ urd --version
 
 ## Keyboard Shortcuts
 
-### Navigation
-- `l`/`→` - Next day (move right)
-- `h`/`←` - Previous day (move left)
-- `j`/`↓` - Next week (move down)
-- `k`/`↑` - Previous week (move up)
-- `J` - Jump to next week
-- `K` - Jump to previous week
-- `>` - Next month
-- `<` - Previous month
-- `t` - Today
+Key bindings are fully customizable via the urdrc configuration file. The default bindings are:
+
+### Navigation (Hourly View)
+- `j`/`↓` - Scroll down (next time slot)
+- `k`/`↑` - Scroll up (previous time slot)
+- `H` - Previous day
+- `L` - Next day
+- `K` - Previous week
+- `J` - Next week
+- `o` - Go to current time (home)
+- `z` - Zoom (cycle between 1 hour, 30 minute, and 15 minute time slots)
 
 ### Actions
-- `n` - New event (natural language input)
-- `r` - Refresh
-- `?` - Help
-- `q` - Quit
+- `Enter` - Edit existing reminder or create new one at cursor
+- `t` - Add new timed reminder using template
+- `q` - Quick add event
+- `e` - Edit reminder file
+- `Ctrl+L` - Refresh
+- `?` - Toggle help
+- `Q` - Quit
+- `i` - Toggle event IDs (not configurable)
 
-### Views
-- `1` - Calendar view
-- `2` - Hourly schedule
-- `3` - Timed reminders
-- `4` - Untimed reminders
-
-### Hourly View Controls (Default View)
-- `j`/`k` - Navigate up/down between time slots
-- `h`/`H`/`←` - Previous day
-- `l`/`L`/`→` - Next day
-- `J` - Jump to next week
-- `K` - Jump to previous week
-- `z` - Zoom (cycle between 1 hour, 30 minute, and 15 minute time slots)
-- `n` - Create event at selected time slot
-- `t` - Jump to today
+### Event Selection
+When multiple events exist at the same time:
+- `j`/`↓` - Move down in list
+- `k`/`↑` - Move up in list
+- `Enter` - Select and edit
+- `1-9` - Quick select by number
+- `Esc` - Cancel selection
 
 ## Configuration
 
@@ -114,11 +111,23 @@ set refresh_rate 30
 set confirm_delete true
 
 # Key bindings
-bind l next_day
-bind h prev_day
-bind j next_week
-bind k prev_week
-bind n new_event
+bind "j" scroll_down
+bind "<down>" scroll_down
+bind "k" scroll_up
+bind "<up>" scroll_up
+bind "H" previous_day
+bind "L" next_day
+bind "K" previous_week
+bind "J" next_week
+bind "o" home
+bind "z" zoom
+bind "<enter>" edit
+bind "e" edit_any
+bind "t" new_timed
+bind "q" quick_add
+bind "\\Cl" refresh
+bind "?" help
+bind "Q" quit
 
 # Colors
 color today yellow
