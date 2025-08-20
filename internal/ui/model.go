@@ -420,6 +420,20 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.loadEventsForSchedule()
 		}
 
+	case "next_month":
+		// Next month - jump forward by one month
+		m.selectedDate = m.selectedDate.AddDate(0, 1, 0)
+		if m.needsEventReload() {
+			m.loadEventsForSchedule()
+		}
+
+	case "previous_month":
+		// Previous month - jump back by one month
+		m.selectedDate = m.selectedDate.AddDate(0, -1, 0)
+		if m.needsEventReload() {
+			m.loadEventsForSchedule()
+		}
+
 	case "home":
 		// Go to current time - start fresh
 		now := time.Now()

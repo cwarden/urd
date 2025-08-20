@@ -746,7 +746,7 @@ func (m *Model) renderScheduleStatusBar() string {
 
 	left := fmt.Sprintf(" Currently: %s", dateStr)
 
-	right := "j/k:slot  H/L:day  J/K:week  z:zoom  o:today  i:IDs  n:new  ?:help  q:quit"
+	right := "j/k:slot  H/L:day  J/K:week  {/}:month  z:zoom  o:today  ?:help  q:quit"
 
 	if m.message != "" {
 		right = m.styles.Message.Render(m.message)

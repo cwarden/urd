@@ -83,6 +83,8 @@ func DefaultConfig() *Config {
 			"H":       "previous_day",
 			"J":       "next_week",
 			"K":       "previous_week",
+			"{":       "previous_month",
+			"}":       "next_month",
 			"o":       "home",
 			"z":       "zoom",
 			"<enter>": "edit",
