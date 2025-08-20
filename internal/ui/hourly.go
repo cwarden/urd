@@ -8,6 +8,7 @@ import (
 	"urd/internal/remind"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/wordwrap"
 )
 
 // viewHourlySchedule renders the hourly schedule view
@@ -488,6 +489,18 @@ func (m *Model) renderSelectedSlotEvents() string {
 
 	var lines []string
 
+	// Calculate available width for the box
+	// The schedule takes 2/3 of width, so we have 1/3 for the right side
+	scheduleWidth := m.width * 2 / 3
+	if scheduleWidth < 40 {
+		scheduleWidth = 40
+	}
+	// Right side width minus padding and borders
+	boxWidth := m.width - scheduleWidth - 4
+	if boxWidth < 30 {
+		boxWidth = 30
+	}
+
 	// Header with selected time
 	timeHeader := fmt.Sprintf("Selected: %s at %02d:%02d",
 		selectedDate.Format("Mon Jan 2, 2006"),
@@ -508,7 +521,14 @@ func (m *Model) renderSelectedSlotEvents() string {
 			// Event time and duration
 			eventTime := fmt.Sprintf("%02d:%02d", event.Time.Hour(), event.Time.Minute())
 			if event.Duration != nil {
-				eventTime += fmt.Sprintf(" (%v)", *event.Duration)
+				// Format duration without seconds
+				hours := int(event.Duration.Hours())
+				minutes := int(event.Duration.Minutes()) % 60
+				if hours > 0 {
+					eventTime += fmt.Sprintf(" (%dh %dm)", hours, minutes)
+				} else {
+					eventTime += fmt.Sprintf(" (%dm)", minutes)
+				}
 			}
 			lines = append(lines, m.styles.Event.Render(eventTime))
 
@@ -518,18 +538,16 @@ func (m *Model) renderSelectedSlotEvents() string {
 				// Show ID for debugging
 				lines = append(lines, m.styles.Help.Render(fmt.Sprintf("ID: %s", event.ID)))
 			}
-			// Wrap long descriptions
-			maxWidth := 30
-			if len(desc) > maxWidth {
-				for len(desc) > maxWidth {
-					lines = append(lines, desc[:maxWidth])
-					desc = desc[maxWidth:]
+			// Wrap long descriptions using wordwrap to avoid breaking words/URLs
+			maxWidth := boxWidth - 4 // Account for padding
+			if maxWidth < 20 {
+				maxWidth = 20 // Minimum width to avoid too narrow wrapping
+			}
+			wrapped := wordwrap.String(desc, maxWidth)
+			for _, line := range strings.Split(wrapped, "\n") {
+				if line != "" {
+					lines = append(lines, line)
 				}
-				if len(desc) > 0 {
-					lines = append(lines, desc)
-				}
-			} else {
-				lines = append(lines, desc)
 			}
 
 			// Tags if any
@@ -554,9 +572,10 @@ func (m *Model) renderSelectedSlotEvents() string {
 		}
 	}
 
-	// Add border
+	// Add border with calculated width
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
-	return m.styles.Border.Render(content)
+	boxStyle := m.styles.Border.Copy().Width(boxWidth)
+	return boxStyle.Render(content)
 }
 
 // renderScheduleStatusBar renders the status bar for schedule view
