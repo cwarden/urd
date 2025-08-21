@@ -14,6 +14,8 @@ type Client struct {
 	RemindPath string
 	Files      []string
 	Timezone   *time.Location
+	watcher    *FileWatcher
+	eventChan  chan FileChangeEvent
 }
 
 func NewClient() *Client {
@@ -293,6 +295,55 @@ func (c *Client) generateEventID(event Event) string {
 	}
 
 	return fmt.Sprintf("evt-%d", sum)
+}
+
+// WatchFiles implements ReminderSource interface - watches remind files for changes
+func (c *Client) WatchFiles() (<-chan FileChangeEvent, error) {
+	if c.watcher != nil {
+		return c.eventChan, nil // Already watching
+	}
+
+	c.eventChan = make(chan FileChangeEvent, 10)
+
+	watcher, err := NewFileWatcher(func(path string) {
+		select {
+		case c.eventChan <- FileChangeEvent{Path: path, Timestamp: time.Now()}:
+		default:
+			// Channel full, drop event
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	c.watcher = watcher
+
+	// Add all configured files to the watcher
+	for _, file := range c.Files {
+		if err := c.watcher.AddFile(file); err != nil {
+			// Log error but continue with other files
+			continue
+		}
+	}
+
+	return c.eventChan, nil
+}
+
+// StopWatching implements ReminderSource interface - stops file watching
+func (c *Client) StopWatching() error {
+	if c.watcher == nil {
+		return nil
+	}
+
+	err := c.watcher.Close()
+	c.watcher = nil
+
+	if c.eventChan != nil {
+		close(c.eventChan)
+		c.eventChan = nil
+	}
+
+	return err
 }
 
 func (c *Client) AddEvent(desc, dateStr, timeStr string) error {

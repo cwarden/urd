@@ -20,6 +20,8 @@ func main() {
 		configFile = flag.String("config", "", "Path to config file")
 		listEvents = flag.Bool("list", false, "List today's events and exit")
 		version    = flag.Bool("version", false, "Show version and exit")
+		useP2      = flag.Bool("p2", false, "Include p2 tasks as calendar events")
+		p2File     = flag.String("p2-file", "tasks.rec", "Path to p2 tasks file")
 	)
 	flag.Parse()
 
@@ -39,25 +41,40 @@ func main() {
 		// TODO: Load specific config file
 	}
 
-	// Initialize remind client
-	client := remind.NewClient()
-	client.RemindPath = cfg.RemindCommand
-	client.SetFiles(cfg.RemindFiles)
+	// Initialize reminder source(s)
+	var source remind.ReminderSource
 
-	// Test remind connection
-	if err := client.TestConnection(); err != nil {
+	// Always start with remind client
+	remindClient := remind.NewClient()
+	remindClient.RemindPath = cfg.RemindCommand
+	remindClient.SetFiles(cfg.RemindFiles)
+
+	// Test remind connection (only for remind client, not the interface)
+	if err := remindClient.TestConnection(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 		fmt.Fprintf(os.Stderr, "Please ensure 'remind' is installed and in your PATH\n")
 	}
 
+	// If p2 is requested, create a composite source
+	if *useP2 {
+		p2Client := remind.NewP2Client()
+		p2Client.SetFiles([]string{*p2File})
+		// Create composite source with both remind and p2
+		source = remind.NewCompositeSource(remindClient, p2Client)
+	} else {
+		// Use remind client alone
+		source = remindClient
+	}
+
 	// List mode
 	if *listEvents {
-		listTodayEvents(cfg, client)
+		listTodayEvents(cfg, source)
 		return
 	}
 
 	// Start TUI
-	model := ui.NewModel(cfg, client)
+	// We need to create a version of NewModel that also takes the remind client
+	model := ui.NewModelWithRemind(cfg, source, remindClient)
 	p := tea.NewProgram(model, tea.WithAltScreen())
 
 	if _, err := p.Run(); err != nil {
@@ -65,8 +82,10 @@ func main() {
 	}
 }
 
-func listTodayEvents(cfg *config.Config, client *remind.Client) {
-	events, err := client.GetEventsForDate(time.Now())
+func listTodayEvents(cfg *config.Config, source remind.ReminderSource) {
+	today := time.Now()
+	tomorrow := today.AddDate(0, 0, 1)
+	events, err := source.GetEvents(today, tomorrow)
 	if err != nil {
 		log.Printf("Error getting events: %v", err)
 		return

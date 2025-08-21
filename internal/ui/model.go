@@ -27,10 +27,10 @@ const (
 
 type Model struct {
 	// Core components
-	config  *config.Config
-	client  *remind.Client
-	watcher *remind.FileWatcher
-	parser  *parser.TimeParser
+	config       *config.Config
+	source       remind.ReminderSource
+	remindClient *remind.Client // Keep reference for remind-specific operations
+	parser       *parser.TimeParser
 
 	// View state
 	mode            ViewMode
@@ -91,12 +91,25 @@ type Styles struct {
 	Border   lipgloss.Style
 }
 
-func NewModel(cfg *config.Config, client *remind.Client) *Model {
+func NewModel(cfg *config.Config, source remind.ReminderSource) *Model {
+	// Try to extract remind client if it's available
+	var remindClient *remind.Client
+	if client, ok := source.(*remind.Client); ok {
+		remindClient = client
+	}
+	// Check if it's a composite source containing a remind client
+	// This would require exposing the sources in CompositeSource, but for now we'll leave it
+
+	return NewModelWithRemind(cfg, source, remindClient)
+}
+
+func NewModelWithRemind(cfg *config.Config, source remind.ReminderSource, remindClient *remind.Client) *Model {
 	now := time.Now()
 
 	m := &Model{
 		config:        cfg,
-		client:        client,
+		source:        source,
+		remindClient:  remindClient,
 		parser:        parser.NewTimeParser(),
 		mode:          ViewHourly,
 		selectedDate:  now,
@@ -110,16 +123,15 @@ func NewModel(cfg *config.Config, client *remind.Client) *Model {
 	// Load initial events for hourly view
 	m.loadEventsForSchedule()
 
-	// Set up file watcher
-	watcher, err := remind.NewFileWatcher(func(path string) {
-		// Trigger refresh when files change
-		m.loadEvents()
-	})
-	if err == nil {
-		m.watcher = watcher
-		for _, file := range cfg.RemindFiles {
-			watcher.AddFile(file)
-		}
+	// Set up file watcher using the source's watch capability
+	if watchChan, err := source.WatchFiles(); err == nil && watchChan != nil {
+		// Start a goroutine to handle file change events
+		go func() {
+			for range watchChan {
+				// Trigger refresh when files change
+				m.loadEvents()
+			}
+		}()
 	}
 
 	return m
@@ -666,7 +678,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		timeStr := fmt.Sprintf("%02d:%02d", hour, minute)
 
 		// Add the timed event using the template and get the line number
-		lineNumber, err := m.client.AddTimedEventFromTemplate(m.config.TimedTemplate, dateStr, timeStr)
+		if m.remindClient == nil {
+			m.showMessage("Cannot add events: remind client not available")
+			return m, nil
+		}
+		lineNumber, err := m.remindClient.AddTimedEventFromTemplate(m.config.TimedTemplate, dateStr, timeStr)
 		if err != nil {
 			m.showMessage(fmt.Sprintf("Failed to add reminder: %v", err))
 			return m, nil
@@ -689,7 +705,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		dateStr := fmt.Sprintf("%s %02d %d", monthName(selectedDate.Month()), selectedDate.Day(), selectedDate.Year())
 
 		// Add the untimed event using the template
-		lineNumber, err := m.client.AddEventFromTemplate(m.config.UntimedTemplate, dateStr, "")
+		if m.remindClient == nil {
+			m.showMessage("Cannot add events: remind client not available")
+			return m, nil
+		}
+		lineNumber, err := m.remindClient.AddEventFromTemplate(m.config.UntimedTemplate, dateStr, "")
 		if err != nil {
 			m.showMessage(fmt.Sprintf("Failed to add untimed reminder: %v", err))
 			return m, nil
@@ -748,7 +768,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Some templates don't use time (untimed ones)
 		if strings.Contains(template, "%hour%") || strings.Contains(template, "AT ") {
 			// Template uses time
-			lineNumber, err := m.client.AddEventFromTemplate(template, dateStr, timeStr)
+			if m.remindClient == nil {
+				m.showMessage("Cannot add events: remind client not available")
+				return m, nil
+			}
+			lineNumber, err := m.remindClient.AddEventFromTemplate(template, dateStr, timeStr)
 			if err != nil {
 				m.showMessage(fmt.Sprintf("Failed to add from template: %v", err))
 				return m, nil
@@ -759,7 +783,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		} else {
 			// Untimed template
-			lineNumber, err := m.client.AddEventFromTemplate(template, dateStr, "")
+			if m.remindClient == nil {
+				m.showMessage("Cannot add events: remind client not available")
+				return m, nil
+			}
+			lineNumber, err := m.remindClient.AddEventFromTemplate(template, dateStr, "")
 			if err != nil {
 				m.showMessage(fmt.Sprintf("Failed to add from template: %v", err))
 				return m, nil
@@ -838,7 +866,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			timeStr := fmt.Sprintf("%02d:%02d", hour, minute)
 
 			// Add the timed event using the template and get the line number
-			lineNumber, err := m.client.AddTimedEventFromTemplate(m.config.TimedTemplate, dateStr, timeStr)
+			if m.remindClient == nil {
+				m.showMessage("Cannot add events: remind client not available")
+				return m, nil
+			}
+			lineNumber, err := m.remindClient.AddTimedEventFromTemplate(m.config.TimedTemplate, dateStr, timeStr)
 			if err != nil {
 				m.showMessage(fmt.Sprintf("Failed to add reminder: %v", err))
 				return m, nil
@@ -906,7 +938,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		dateStr := fmt.Sprintf("%s %02d %d", monthName(selectedDate.Month()), selectedDate.Day(), selectedDate.Year())
 
 		// These are typically untimed templates
-		lineNumber, err := m.client.AddEventFromTemplate(template, dateStr, "")
+		if m.remindClient == nil {
+			m.showMessage("Cannot add events: remind client not available")
+			return m, nil
+		}
+		lineNumber, err := m.remindClient.AddEventFromTemplate(template, dateStr, "")
 		if err != nil {
 			m.showMessage(fmt.Sprintf("Failed to add from template: %v", err))
 			return m, nil
@@ -995,7 +1031,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.clipboardCut = true
 
 			// Immediately remove from file
-			if err := m.client.RemoveEvent(*selectedEvent); err != nil {
+			if m.remindClient == nil {
+				m.showMessage("Cannot remove events: remind client not available")
+				return m, nil
+			}
+			if err := m.remindClient.RemoveEvent(*selectedEvent); err != nil {
 				m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
 				m.clipboardEvent = nil
 				m.clipboardCut = false
@@ -1057,7 +1097,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Add the event to the remind file
-		lineNumber, err := m.client.AddEventStruct(newEvent)
+		if m.remindClient == nil {
+			m.showMessage("Cannot add events: remind client not available")
+			return m, nil
+		}
+		lineNumber, err := m.remindClient.AddEventStruct(newEvent)
 		if err != nil {
 			m.showMessage(fmt.Sprintf("Failed to paste event: %v", err))
 			return m, nil
@@ -1126,7 +1170,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Add the event to the remind file
-		lineNumber, err := m.client.AddEventStruct(newEvent)
+		if m.remindClient == nil {
+			m.showMessage("Cannot add events: remind client not available")
+			return m, nil
+		}
+		lineNumber, err := m.remindClient.AddEventStruct(newEvent)
 		if err != nil {
 			m.showMessage(fmt.Sprintf("Failed to paste event: %v", err))
 			return m, nil
@@ -1336,7 +1384,11 @@ func (m *Model) handleEditorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Parse and save event using natural language processing
 		if m.inputBuffer != "" {
 			// Use the new quick event method with natural language parsing
-			lineNumber, err := m.client.AddQuickEvent(m.inputBuffer)
+			if m.remindClient == nil {
+				m.showMessage("Cannot add events: remind client not available")
+				return m, nil
+			}
+			lineNumber, err := m.remindClient.AddQuickEvent(m.inputBuffer)
 			if err == nil {
 				m.showMessage("Event added - launching editor...")
 				m.mode = ViewHourly
@@ -1596,7 +1648,7 @@ func (m *Model) findNextSearchResult() bool {
 	endDate := m.selectedDate.AddDate(0, 1, 0) // Search up to 1 month ahead
 
 	// Load events for extended range if needed
-	events, err := m.client.GetEvents(m.selectedDate, endDate)
+	events, err := m.source.GetEvents(m.selectedDate, endDate)
 	if err != nil {
 		return false
 	}
@@ -1840,7 +1892,7 @@ func (m *Model) loadEvents() {
 	start := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), 1, 0, 0, 0, 0, time.Local)
 	end := start.AddDate(0, 1, -1)
 
-	events, err := m.client.GetEvents(start, end)
+	events, err := m.source.GetEvents(start, end)
 	if err == nil {
 		m.events = events
 	}
@@ -1851,7 +1903,7 @@ func (m *Model) loadEventsForSchedule() {
 	start := m.selectedDate.AddDate(0, 0, -14) // Load 2 weeks before
 	end := m.selectedDate.AddDate(0, 0, 14)    // Load 2 weeks after
 
-	events, err := m.client.GetEvents(start, end)
+	events, err := m.source.GetEvents(start, end)
 	if err == nil {
 		m.events = events
 		m.eventsLoadedFor = m.selectedDate // Track when we last loaded events
@@ -2029,6 +2081,10 @@ func (m *Model) getActionForKey(key string) string {
 		return action
 	}
 	return ""
+}
+
+func (m *Model) hasRemindClient() bool {
+	return m.remindClient != nil
 }
 
 func (m *Model) showMessage(msg string) {
