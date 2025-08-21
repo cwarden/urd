@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"urd/internal/config"
-	"urd/internal/remind"
-	"urd/internal/ui"
+	"github.com/cwarden/urd/internal/config"
+	"github.com/cwarden/urd/internal/remind"
+	"github.com/cwarden/urd/internal/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
 )

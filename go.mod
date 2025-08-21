@@ -1,4 +1,4 @@
-module urd
+module github.com/cwarden/urd
 
 go 1.24.5
 

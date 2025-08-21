@@ -1,9 +1,9 @@
 package ui
 
 import (
+	"github.com/cwarden/urd/internal/remind"
 	"testing"
 	"time"
-	"urd/internal/remind"
 )
 
 func TestBuildSimpleEventLayout(t *testing.T) {

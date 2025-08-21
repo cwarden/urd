@@ -1,10 +1,10 @@
 package ui
 
 import (
+	"github.com/cwarden/urd/internal/remind"
 	"strings"
 	"testing"
 	"time"
-	"urd/internal/remind"
 )
 
 func TestMultipleEventsWithSameDescription(t *testing.T) {

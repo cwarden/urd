@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"urd/internal/remind"
+	"github.com/cwarden/urd/internal/remind"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/wordwrap"

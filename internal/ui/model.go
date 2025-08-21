@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"urd/internal/config"
-	"urd/internal/parser"
-	"urd/internal/remind"
+	"github.com/cwarden/urd/internal/config"
+	"github.com/cwarden/urd/internal/parser"
+	"github.com/cwarden/urd/internal/remind"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
