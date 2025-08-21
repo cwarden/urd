@@ -88,6 +88,8 @@ func DefaultConfig() *Config {
 			"o":       "home",
 			"g":       "goto",
 			"z":       "zoom",
+			"/":       "begin_search",
+			"n":       "search_next",
 			"<enter>": "edit",
 			"e":       "edit_any",
 			"t":       "new_timed",

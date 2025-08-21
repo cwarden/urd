@@ -316,6 +316,42 @@ func (m *Model) viewGotoDate() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
+func (m *Model) viewSearch() string {
+	var sections []string
+
+	header := m.styles.Header.Render("Search Reminders")
+	sections = append(sections, header)
+	sections = append(sections, "")
+
+	prompt := m.styles.Normal.Render("Search for:")
+	sections = append(sections, prompt)
+	sections = append(sections, m.styles.Help.Render("Search in event descriptions, tags, and content"))
+
+	// Show input with cursor
+	input := m.inputBuffer
+	if m.cursorPos < len(input) {
+		input = input[:m.cursorPos] + "█" + input[m.cursorPos:]
+	} else {
+		input = input + "█"
+	}
+
+	inputLine := m.styles.Selected.Render(input)
+	sections = append(sections, inputLine)
+	sections = append(sections, "")
+
+	// Show search info if any
+	if m.searchTerm != "" {
+		searchInfo := fmt.Sprintf("Searching for: %s", m.searchTerm)
+		sections = append(sections, m.styles.Help.Render(searchInfo))
+		sections = append(sections, "")
+	}
+
+	help := m.styles.Help.Render("Enter to search, n for next result, Esc to cancel")
+	sections = append(sections, help)
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
 func (m *Model) renderStatusBar() string {
 	left := fmt.Sprintf(" %s | Events: %d",
 		m.selectedDate.Format("Jan 2, 2006"),

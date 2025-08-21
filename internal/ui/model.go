@@ -22,6 +22,7 @@ const (
 	ViewEventEditor
 	ViewEventSelector // For choosing between multiple events
 	ViewGotoDate      // For entering a date to jump to
+	ViewSearch        // For entering search terms
 )
 
 type Model struct {
@@ -66,6 +67,12 @@ type Model struct {
 	// Untimed reminders state
 	focusUntimed         bool // true when focused on untimed reminders box
 	selectedUntimedIndex int  // index of selected untimed reminder
+
+	// Search state
+	searchTerm       string         // current search term
+	searchResults    []remind.Event // events matching search
+	currentSearchHit int            // index in searchResults
+	lastSearchDate   time.Time      // when we last searched (for cache invalidation)
 
 	// Styles
 	styles Styles
@@ -220,6 +227,8 @@ func (m *Model) View() string {
 		return m.viewEventSelector()
 	case ViewGotoDate:
 		return m.viewGotoDate()
+	case ViewSearch:
+		return m.viewSearch()
 	default:
 		return m.viewHourlySchedule()
 	}
@@ -295,8 +304,8 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, tea.Quit
 			}
 		case "i":
-			// Toggle showing event IDs (only if not bound to something else and not in editor mode)
-			if m.mode != ViewEventEditor {
+			// Toggle showing event IDs (only if not in input modes)
+			if m.mode != ViewEventEditor && m.mode != ViewSearch && m.mode != ViewGotoDate {
 				m.showEventIDs = !m.showEventIDs
 				if m.showEventIDs {
 					m.showMessage("Showing event IDs")
@@ -327,6 +336,8 @@ func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEventSelectorKeys(msg)
 	case ViewGotoDate:
 		return m.handleGotoDateKeys(msg)
+	case ViewSearch:
+		return m.handleSearchKeys(msg)
 	}
 
 	return m, nil
@@ -539,6 +550,25 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.inputBuffer = ""
 		m.cursorPos = 0
 		// Don't show a message here since the dialog will show instructions
+		return m, nil
+
+	case "begin_search":
+		// Start search
+		m.mode = ViewSearch
+		m.inputBuffer = ""
+		m.cursorPos = 0
+		return m, nil
+
+	case "search_next":
+		// Find next search result
+		if m.searchTerm != "" {
+			found := m.findNextSearchResult()
+			if !found {
+				m.showMessage("No more search results found.")
+			}
+		} else {
+			m.showMessage("No active search. Press / to search.")
+		}
 		return m, nil
 
 	case "quick_add":
@@ -1461,6 +1491,354 @@ func (m *Model) handleGotoDateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.cursorPos++
 	}
 	return m, nil
+}
+
+func (m *Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyEscape:
+		m.mode = ViewHourly
+		return m, nil
+	case tea.KeyEnter:
+		// Perform search
+		if m.inputBuffer != "" {
+			m.searchTerm = m.inputBuffer
+			// Search forward from current position
+			found := m.findNextSearchResult()
+			if found {
+				m.showMessage("Press 'n' to find next occurrence.")
+			} else {
+				m.showMessage("No results found.")
+			}
+		}
+		m.mode = ViewHourly
+		return m, nil
+	case tea.KeyBackspace:
+		if m.cursorPos > 0 {
+			m.inputBuffer = m.inputBuffer[:m.cursorPos-1] + m.inputBuffer[m.cursorPos:]
+			m.cursorPos--
+		}
+	case tea.KeyLeft:
+		if m.cursorPos > 0 {
+			m.cursorPos--
+		}
+	case tea.KeyRight:
+		if m.cursorPos < len(m.inputBuffer) {
+			m.cursorPos++
+		}
+	case tea.KeyRunes:
+		for _, r := range msg.Runes {
+			m.inputBuffer = m.inputBuffer[:m.cursorPos] + string(r) + m.inputBuffer[m.cursorPos:]
+			m.cursorPos++
+		}
+	case tea.KeySpace:
+		// Handle space explicitly
+		m.inputBuffer = m.inputBuffer[:m.cursorPos] + " " + m.inputBuffer[m.cursorPos:]
+		m.cursorPos++
+	}
+
+	// Handle 'n' key even in search mode for next result
+	if msg.String() == "n" && m.searchTerm != "" {
+		found := m.findNextSearchResult()
+		if !found {
+			m.showMessage("No more search results found.")
+		}
+	}
+
+	return m, nil
+}
+
+func (m *Model) performSearch() {
+	if m.searchTerm == "" {
+		m.searchResults = nil
+		return
+	}
+
+	// Search through all events
+	var results []remind.Event
+	searchLower := strings.ToLower(m.searchTerm)
+
+	for _, event := range m.events {
+		// Search in description
+		if strings.Contains(strings.ToLower(event.Description), searchLower) {
+			results = append(results, event)
+			continue
+		}
+
+		// Search in tags
+		for _, tag := range event.Tags {
+			if strings.Contains(strings.ToLower(tag), searchLower) {
+				results = append(results, event)
+				break
+			}
+		}
+	}
+
+	m.searchResults = results
+	m.lastSearchDate = time.Now()
+}
+
+// findNextSearchResult searches forward from current position for next matching event
+func (m *Model) findNextSearchResult() bool {
+	if m.searchTerm == "" {
+		return false
+	}
+
+	searchLower := strings.ToLower(m.searchTerm)
+
+	// Get current position
+	currentDate := m.selectedDate
+	currentSlot := m.selectedSlot
+
+	// Calculate current time for timed events
+	slotsPerDay := 24
+	if m.timeIncrement == 30 {
+		slotsPerDay = 48
+	} else if m.timeIncrement == 15 {
+		slotsPerDay = 96
+	}
+
+	// Search forward through events starting from current position
+	// First, check if we need to expand our event range
+	endDate := m.selectedDate.AddDate(0, 1, 0) // Search up to 1 month ahead
+
+	// Load events for extended range if needed
+	events, err := m.client.GetEvents(m.selectedDate, endDate)
+	if err != nil {
+		return false
+	}
+
+	// Helper function to check if event matches search
+	eventMatches := func(event remind.Event) bool {
+		// Search in description
+		if strings.Contains(strings.ToLower(event.Description), searchLower) {
+			return true
+		}
+		// Search in tags
+		for _, tag := range event.Tags {
+			if strings.Contains(strings.ToLower(tag), searchLower) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Helper function to compare event position with current position
+	isAfterCurrent := func(event remind.Event) bool {
+		// If event is on a later date, it's after current
+		if event.Date.After(currentDate) {
+			return true
+		}
+
+		// If event is on same date
+		if event.Date.Year() == currentDate.Year() && event.Date.YearDay() == currentDate.YearDay() {
+			// If it's an untimed event and we're focused on untimed, check index
+			if event.Time == nil {
+				if m.focusUntimed {
+					// Find index of this untimed event
+					untimedIndex := 0
+					for _, e := range events {
+						if e.Time == nil &&
+							e.Date.Year() == currentDate.Year() &&
+							e.Date.YearDay() == currentDate.YearDay() {
+							if e.ID == event.ID {
+								return untimedIndex > m.selectedUntimedIndex
+							}
+							untimedIndex++
+						}
+					}
+				}
+				// If we're not focused on untimed, untimed events come after timed
+				return !m.focusUntimed
+			}
+
+			// For timed events, compare time slots
+			if event.Time != nil {
+				hour := event.Time.Hour()
+				minute := event.Time.Minute()
+				localSlot := hour
+				if m.timeIncrement == 30 {
+					localSlot = hour*2 + minute/30
+				} else if m.timeIncrement == 15 {
+					localSlot = hour*4 + minute/15
+				}
+
+				// Calculate day offset
+				baseDate := time.Date(currentDate.Year(), currentDate.Month(), currentDate.Day(), 0, 0, 0, 0, currentDate.Location())
+				eventDate := time.Date(event.Date.Year(), event.Date.Month(), event.Date.Day(), 0, 0, 0, 0, event.Date.Location())
+				dayDiff := int(eventDate.Sub(baseDate).Hours() / 24)
+				eventSlot := dayDiff*slotsPerDay + localSlot
+
+				return eventSlot > currentSlot
+			}
+		}
+
+		return false
+	}
+
+	// Find the next matching event
+	var nextEvent *remind.Event
+	for _, event := range events {
+		if eventMatches(event) && isAfterCurrent(event) {
+			if nextEvent == nil {
+				nextEvent = &event
+			} else {
+				// Choose the earlier of the two events
+				if event.Date.Before(nextEvent.Date) {
+					nextEvent = &event
+				} else if event.Date.Equal(nextEvent.Date) {
+					// Same date - compare times
+					if event.Time != nil && nextEvent.Time != nil {
+						if event.Time.Before(*nextEvent.Time) {
+							nextEvent = &event
+						}
+					} else if event.Time != nil && nextEvent.Time == nil {
+						// Timed event comes before untimed
+						nextEvent = &event
+					}
+				}
+			}
+		}
+	}
+
+	if nextEvent != nil {
+		// Jump to the found event
+		m.selectedDate = nextEvent.Date
+
+		// Load events for the new date if needed
+		if m.needsEventReload() {
+			m.loadEventsForSchedule()
+		}
+
+		// Set position based on event type
+		if nextEvent.Time != nil {
+			// Timed event - jump to its time slot
+			hour := nextEvent.Time.Hour()
+			minute := nextEvent.Time.Minute()
+			localSlot := hour
+			if m.timeIncrement == 30 {
+				localSlot = hour*2 + minute/30
+			} else if m.timeIncrement == 15 {
+				localSlot = hour*4 + minute/15
+			}
+
+			baseDate := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), m.selectedDate.Day(), 0, 0, 0, 0, m.selectedDate.Location())
+			eventDate := time.Date(nextEvent.Date.Year(), nextEvent.Date.Month(), nextEvent.Date.Day(), 0, 0, 0, 0, nextEvent.Date.Location())
+			dayDiff := int(eventDate.Sub(baseDate).Hours() / 24)
+			m.selectedSlot = dayDiff*slotsPerDay + localSlot
+
+			// Adjust view to show the selected slot
+			visibleSlots := m.height - 2
+			m.topSlot = m.selectedSlot - visibleSlots/2
+			if m.topSlot < 0 {
+				m.topSlot = 0
+			}
+
+			m.focusUntimed = false
+		} else {
+			// Untimed event - focus on untimed section
+			m.focusUntimed = true
+			// Find the index of this event in untimed events
+			untimedIndex := 0
+			for _, e := range m.events {
+				if e.Time == nil &&
+					e.Date.Year() == nextEvent.Date.Year() &&
+					e.Date.YearDay() == nextEvent.Date.YearDay() {
+					if e.ID == nextEvent.ID {
+						m.selectedUntimedIndex = untimedIndex
+						break
+					}
+					untimedIndex++
+				}
+			}
+		}
+
+		m.showMessage(fmt.Sprintf("Found: %s", nextEvent.Description))
+		return true
+	}
+
+	return false
+}
+
+func (m *Model) jumpToSearchResult() {
+	if len(m.searchResults) == 0 || m.currentSearchHit >= len(m.searchResults) {
+		return
+	}
+
+	event := m.searchResults[m.currentSearchHit]
+	oldDate := m.selectedDate
+
+	// Jump to the event's date
+	m.selectedDate = event.Date
+
+	// If we changed dates, reload events and refresh search results
+	if !oldDate.Equal(event.Date) {
+		m.loadEventsForSchedule()
+		// Re-run the search to update search results with new events
+		if m.searchTerm != "" {
+			m.performSearch()
+			// Find the event in the new search results
+			for i, result := range m.searchResults {
+				if result.ID == event.ID {
+					m.currentSearchHit = i
+					break
+				}
+			}
+		}
+	}
+
+	// If it's a timed event, jump to its time slot
+	if event.Time != nil {
+		slotsPerDay := 24
+		if m.timeIncrement == 30 {
+			slotsPerDay = 48
+		} else if m.timeIncrement == 15 {
+			slotsPerDay = 96
+		}
+
+		// Calculate the day offset and time slot
+		baseDate := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), m.selectedDate.Day(), 0, 0, 0, 0, m.selectedDate.Location())
+		eventDate := time.Date(event.Date.Year(), event.Date.Month(), event.Date.Day(), 0, 0, 0, 0, event.Date.Location())
+		dayDiff := int(eventDate.Sub(baseDate).Hours() / 24)
+
+		hour := event.Time.Hour()
+		minute := event.Time.Minute()
+		localSlot := hour
+		if m.timeIncrement == 30 {
+			localSlot = hour*2 + minute/30
+		} else if m.timeIncrement == 15 {
+			localSlot = hour*4 + minute/15
+		}
+
+		m.selectedSlot = dayDiff*slotsPerDay + localSlot
+
+		// Adjust view to show the selected slot
+		visibleSlots := m.height - 2
+		m.topSlot = m.selectedSlot - visibleSlots/2
+		if m.topSlot < 0 {
+			m.topSlot = 0
+		}
+	} else {
+		// For untimed events, focus on untimed reminders
+		m.focusUntimed = true
+		// Find the index of this event in today's untimed events
+		eventIndex := 0
+		for _, e := range m.events {
+			if e.Time == nil &&
+				e.Date.Year() == event.Date.Year() &&
+				e.Date.YearDay() == event.Date.YearDay() {
+				if e.ID == event.ID {
+					m.selectedUntimedIndex = eventIndex
+					break
+				}
+				eventIndex++
+			}
+		}
+	}
+
+	// Reload events for the new date if needed
+	if m.needsEventReload() {
+		m.loadEventsForSchedule()
+	}
 }
 
 func (m *Model) loadEvents() {
