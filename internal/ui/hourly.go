@@ -65,10 +65,7 @@ func (m *Model) renderSchedule() string {
 	}
 
 	// Calculate visible slots
-	visibleSlots := m.height - 2 // Leave room for status bar and one padding line
-	if visibleSlots < 10 {
-		visibleSlots = 10
-	}
+	visibleSlots := m.getVisibleSlots()
 
 	// Events should already be loaded - don't reload on every render
 
@@ -739,25 +736,34 @@ func (m *Model) renderUntimedEvents() string {
 	return boxStyle.Render(content)
 }
 
+// getStatusBarHeight returns the actual height of the rendered status bar
+func (m *Model) getStatusBarHeight() int {
+	statusBar := m.renderScheduleStatusBar()
+	return strings.Count(statusBar, "\n") + 1
+}
+
 // renderScheduleStatusBar renders the status bar for schedule view
 func (m *Model) renderScheduleStatusBar() string {
 	now := time.Now()
 	dateStr := now.Format("Monday, January 2 at 15:04")
 
-	left := fmt.Sprintf(" Currently: %s", dateStr)
+	// First line: Current time
+	currentTime := fmt.Sprintf(" Currently: %s", dateStr)
 
-	right := "j/k:slot  H/L:day  J/K:week  {/}:month  g:goto  /:search  n:next  z:zoom  o:today  ?:help  q:quit"
-
+	// Second line: Help shortcuts (or message if present)
+	var helpLine string
 	if m.message != "" {
-		right = m.styles.Message.Render(m.message)
+		helpLine = m.styles.Message.Render(m.message)
+	} else {
+		helpText := "j/k:slot  H/L:day  J/K:week  {/}:month  g:goto  /:search  n:next  z:zoom  o:today  ?:help  q:quit"
+		// Right-align the help text using lipgloss
+		helpLine = m.styles.Help.Copy().Width(m.width).Align(lipgloss.Right).Render(helpText)
 	}
 
-	width := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if width < 0 {
-		width = 0
-	}
-
-	middle := strings.Repeat(" ", width)
-
-	return m.styles.Help.Render(left + middle + right)
+	// Combine the two lines
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		m.styles.Help.Render(currentTime),
+		helpLine,
+	)
 }

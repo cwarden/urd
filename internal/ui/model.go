@@ -352,10 +352,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		slotsPerDay = 96
 	}
 
-	visibleSlots := m.height - 2 // Leave room for status bar and one padding line
-	if visibleSlots < 10 {
-		visibleSlots = 10
-	}
+	visibleSlots := m.getVisibleSlots()
 
 	// Get the key string and action
 	key := msg.String()
@@ -527,10 +524,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.topSlot = m.topSlot * newSlotsPerDay / (24 * oldIncrement / 60)
 
 		// Ensure selected slot is visible after zoom
-		visibleSlots := m.height - 2 // Leave room for status bar and one padding line
-		if visibleSlots < 10 {
-			visibleSlots = 10
-		}
+		visibleSlots := m.getVisibleSlots()
 
 		// If selected slot is above visible area, scroll up
 		if m.selectedSlot < m.topSlot {
@@ -1449,7 +1443,7 @@ func (m *Model) handleGotoDateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				}
 
 				// Adjust top slot to center the selected slot
-				visibleSlots := m.height - 2
+				visibleSlots := m.getVisibleSlots()
 				m.topSlot = m.selectedSlot - visibleSlots/2
 				if m.topSlot < 0 {
 					m.topSlot = 0
@@ -1727,7 +1721,7 @@ func (m *Model) findNextSearchResult() bool {
 			m.selectedSlot = dayDiff*slotsPerDay + localSlot
 
 			// Adjust view to show the selected slot
-			visibleSlots := m.height - 2
+			visibleSlots := m.getVisibleSlots()
 			m.topSlot = m.selectedSlot - visibleSlots/2
 			if m.topSlot < 0 {
 				m.topSlot = 0
@@ -1812,7 +1806,7 @@ func (m *Model) jumpToSearchResult() {
 		m.selectedSlot = dayDiff*slotsPerDay + localSlot
 
 		// Adjust view to show the selected slot
-		visibleSlots := m.height - 2
+		visibleSlots := m.getVisibleSlots()
 		m.topSlot = m.selectedSlot - visibleSlots/2
 		if m.topSlot < 0 {
 			m.topSlot = 0
@@ -2047,6 +2041,16 @@ func (m *Model) showMessage(msg string) {
 	})
 }
 
+// getVisibleSlots returns the number of slots that can be displayed
+func (m *Model) getVisibleSlots() int {
+	statusBarHeight := m.getStatusBarHeight()
+	visibleSlots := m.height - statusBarHeight
+	if visibleSlots < 10 {
+		visibleSlots = 10
+	}
+	return visibleSlots
+}
+
 // isSlotVisible checks if a given slot is actually visible on screen
 func (m *Model) isSlotVisible(slot int) bool {
 	// Calculate slots per day based on time increment
@@ -2058,10 +2062,7 @@ func (m *Model) isSlotVisible(slot int) bool {
 	}
 
 	// Calculate visible slots
-	visibleSlots := m.height - 2 // Leave room for status bar and one padding line // Leave room for description and status
-	if visibleSlots < 10 {
-		visibleSlots = 10
-	}
+	visibleSlots := m.getVisibleSlots()
 
 	// Simulate the same rendering logic to count actual visible slots
 	prevDay := -999
