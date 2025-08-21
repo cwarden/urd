@@ -11,7 +11,7 @@ import (
 	"github.com/cwarden/urd/internal/remind"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/v2"
 )
 
 type ViewMode int

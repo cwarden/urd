@@ -2,12 +2,13 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/cwarden/urd/internal/remind"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/muesli/reflow/wordwrap"
 )
 
@@ -124,69 +125,123 @@ func (m *Model) renderSchedule() string {
 			// Start with the time
 			line = timeStr + "  "
 
-			// Create a map of column to event for this slot
-			columnEvents := make(map[int]string)
+			// Create a map of column to event data for this slot
+			type columnEvent struct {
+				text  string
+				event remind.Event
+			}
+			columnEvents := make(map[int]columnEvent)
 			maxColumn := 0
 
-			// First pass: figure out how many columns we have
+			// First pass: figure out how many columns we have and determine event display
 			for _, event := range events {
 				column := eventColumns[event.ID]
 				if column > maxColumn {
 					maxColumn = column
 				}
 
-				eventStr := event.Description
-				if m.showEventIDs {
-					// Show event ID for debugging
-					eventStr = fmt.Sprintf("[%s] %s", event.ID, event.Description)
+				// Determine if this is the start of the event or a continuation
+				eventStartSlot := m.findEventStartSlot(event, slotsPerDay)
+				isEventStart := globalSlot == eventStartSlot
+
+				var eventStr string
+				if isEventStart {
+					// Show full event name at the start
+					eventStr = event.Description
+					if m.showEventIDs {
+						// Show event ID for debugging
+						eventStr = fmt.Sprintf("[%s] %s", event.ID, event.Description)
+					}
+				} else {
+					// Show continuation indicator
+					eventStr = "┃" // Vertical line to show continuation
 				}
 
 				// Only store the first event for each column (shouldn't have duplicates)
 				if _, exists := columnEvents[column]; !exists {
-					columnEvents[column] = eventStr
+					columnEvents[column] = columnEvent{
+						text:  eventStr,
+						event: event,
+					}
 				}
 			}
 
-			// Calculate available width for event text
+			// Calculate available width for the schedule
 			scheduleWidth := m.width * 2 / 3
+			if scheduleWidth < 40 {
+				scheduleWidth = 40
+			}
+
+			// Calculate column properties
 			timeWidth := 7 // "HH:MM  "
 			availableWidth := scheduleWidth - timeWidth
-
-			// Calculate space per column based on actual number of columns
 			numColumns := maxColumn + 1
-			padding := 2 // Space between columns
-			columnWidth := availableWidth / numColumns
-			if numColumns > 1 {
-				columnWidth = (availableWidth - (padding * (numColumns - 1))) / numColumns
-			}
 
-			// Only truncate if necessary
-			maxLen := columnWidth
-			if maxLen < 10 {
-				maxLen = 10 // Minimum readable width
-			}
+			if numColumns > 0 {
+				// Build the complete line first, then render with Canvas
+				line = timeStr + "  "
 
-			// Now truncate events that are too long for their column
-			for col, eventStr := range columnEvents {
-				if len(eventStr) > maxLen {
-					columnEvents[col] = eventStr[:maxLen-3] + "..."
+				// Calculate column width based on available space
+				padding := 2 // Space between columns
+				totalPadding := padding * (numColumns - 1)
+				columnWidth := (availableWidth - totalPadding) / numColumns
+
+				// Ensure columns fit within available space
+				// Don't allow columns to be wider than available space permits
+				if columnWidth < 10 {
+					columnWidth = 10 // Absolute minimum
+					// May need to show fewer columns
 				}
-			}
+				// Cap maximum width for readability
+				if columnWidth > 60 {
+					columnWidth = 60
+				}
 
-			// Build the line with proper column spacing
-			currentPos := len(timeStr) + 2
-			for col := 0; col <= maxColumn; col++ {
-				if eventStr, exists := columnEvents[col]; exists {
-					// Calculate where this column should start
-					targetPos := len(timeStr) + 2 + (col * (maxLen + padding))
-					// Add padding to reach the target position
-					if targetPos > currentPos {
-						line += strings.Repeat(" ", targetPos-currentPos)
-						currentPos = targetPos
+				// Ensure we don't overflow the schedule width
+				totalNeededWidth := (columnWidth * numColumns) + totalPadding
+				if totalNeededWidth > availableWidth {
+					// Recalculate to fit
+					columnWidth = (availableWidth - totalPadding) / numColumns
+					if columnWidth < 10 {
+						columnWidth = 10
 					}
-					line += eventStr
-					currentPos += len(eventStr)
 				}
+
+				// Build a single line with all events properly spaced
+				var eventBlocks []string
+				for col := 0; col <= maxColumn; col++ {
+					if colEvent, exists := columnEvents[col]; exists {
+						// Prepare event text
+						eventText := colEvent.text
+
+						// Truncate if too long (don't pad - let lipgloss handle width)
+						if len(eventText) > columnWidth {
+							eventText = eventText[:columnWidth-3] + "..."
+						}
+
+						// Create styled block with fixed width
+						bgColor := m.getEventBackgroundColor(colEvent.event)
+						styledBlock := lipgloss.NewStyle().
+							Background(bgColor).
+							Foreground(lipgloss.ANSIColor(15)).
+							Width(columnWidth). // Use Width to create fixed-width blocks
+							Render(eventText)
+
+						eventBlocks = append(eventBlocks, styledBlock)
+					}
+				}
+
+				// Join all event blocks with proper spacing
+				if len(eventBlocks) > 0 {
+					eventsLine := strings.Join(eventBlocks, strings.Repeat(" ", padding))
+					// Ensure the entire line fits within schedule width
+					line += lipgloss.NewStyle().
+						MaxWidth(availableWidth).
+						Render(eventsLine)
+				}
+			} else {
+				// No events, just the time
+				line = timeStr + "  "
 			}
 		}
 
@@ -202,7 +257,7 @@ func (m *Model) renderSchedule() string {
 				(m.timeIncrement == 30 && minute <= now.Minute() && now.Minute() < minute+30) ||
 				(m.timeIncrement == 15 && minute <= now.Minute() && now.Minute() < minute+15) {
 				// Use a blue background for current time
-				style = m.styles.Today.Background(lipgloss.Color("4"))
+				style = m.styles.Today.Background(lipgloss.ANSIColor(4))
 			}
 		}
 
@@ -229,6 +284,78 @@ func (m *Model) renderSchedule() string {
 	return lipgloss.JoinVertical(lipgloss.Left, lines...)
 }
 
+// findEventStartSlot calculates the global slot where an event starts
+func (m *Model) findEventStartSlot(event remind.Event, slotsPerDay int) int {
+	if event.Time == nil {
+		return -1 // Untimed events don't have slots
+	}
+
+	// Calculate day offset from base date
+	baseDate := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), m.selectedDate.Day(), 0, 0, 0, 0, m.selectedDate.Location())
+	eventDate := time.Date(event.Date.Year(), event.Date.Month(), event.Date.Day(), 0, 0, 0, 0, event.Date.Location())
+	dayDiff := int(eventDate.Sub(baseDate).Hours() / 24)
+
+	hour := event.Time.Hour()
+	minute := event.Time.Minute()
+	localSlot := hour
+
+	if m.timeIncrement == 30 {
+		localSlot = hour*2 + minute/30
+	} else if m.timeIncrement == 15 {
+		localSlot = hour*4 + minute/15
+	}
+
+	return dayDiff*slotsPerDay + localSlot
+}
+
+// getEventBackgroundColor returns a background color based on event properties
+func (m *Model) getEventBackgroundColor(event remind.Event) lipgloss.ANSIColor {
+	// P2 tasks get different colors than remind events
+	if len(event.ID) >= 3 && event.ID[:3] == "p2-" {
+		// P2 task colors based on duration
+		if event.Duration != nil {
+			duration := event.Duration.Hours()
+			if duration >= 4 {
+				return lipgloss.ANSIColor(88) // Dark red for long tasks (4+ hours)
+			} else if duration >= 2 {
+				return lipgloss.ANSIColor(208) // Orange for medium tasks (2-4 hours)
+			} else if duration >= 1 {
+				return lipgloss.ANSIColor(220) // Yellow for short tasks (1-2 hours)
+			} else {
+				return lipgloss.ANSIColor(48) // Light green for very short tasks (<1 hour)
+			}
+		}
+		// Default for P2 tasks without duration
+		return lipgloss.ANSIColor(24) // Blue for P2 tasks
+	}
+
+	// Remind events get different colors
+	if event.Duration != nil {
+		duration := event.Duration.Hours()
+		if duration >= 4 {
+			return lipgloss.ANSIColor(52) // Dark purple for long events
+		} else if duration >= 2 {
+			return lipgloss.ANSIColor(63) // Medium purple for medium events
+		} else if duration >= 1 {
+			return lipgloss.ANSIColor(99) // Light purple for short events
+		} else {
+			return lipgloss.ANSIColor(105) // Very light purple for brief events
+		}
+	}
+
+	// Priority-based colors for events without duration
+	switch event.Priority {
+	case remind.PriorityHigh:
+		return lipgloss.ANSIColor(196) // Bright red
+	case remind.PriorityMedium:
+		return lipgloss.ANSIColor(214) // Orange-yellow
+	case remind.PriorityLow:
+		return lipgloss.ANSIColor(228) // Light yellow
+	default:
+		return lipgloss.ANSIColor(240) // Gray for normal remind events
+	}
+}
+
 // buildSimpleEventLayout creates a map of events and assigns them to columns
 func (m *Model) buildSimpleEventLayout(slotsPerDay int) (map[int][]remind.Event, map[string]int) {
 	eventsBySlot := make(map[int][]remind.Event)
@@ -250,6 +377,29 @@ func (m *Model) buildSimpleEventLayout(slotsPerDay int) (map[int][]remind.Event,
 			uniqueEvents = append(uniqueEvents, event)
 		}
 	}
+
+	// Sort events by time, then by ID for consistent column assignment
+	sort.Slice(uniqueEvents, func(i, j int) bool {
+		// First sort by date
+		if !uniqueEvents[i].Date.Equal(uniqueEvents[j].Date) {
+			return uniqueEvents[i].Date.Before(uniqueEvents[j].Date)
+		}
+		// Then by time (nil times come last)
+		if uniqueEvents[i].Time == nil && uniqueEvents[j].Time == nil {
+			return uniqueEvents[i].ID < uniqueEvents[j].ID
+		}
+		if uniqueEvents[i].Time == nil {
+			return false
+		}
+		if uniqueEvents[j].Time == nil {
+			return true
+		}
+		if !uniqueEvents[i].Time.Equal(*uniqueEvents[j].Time) {
+			return uniqueEvents[i].Time.Before(*uniqueEvents[j].Time)
+		}
+		// Finally by ID for consistent ordering
+		return uniqueEvents[i].ID < uniqueEvents[j].ID
+	})
 
 	for _, event := range uniqueEvents {
 		if event.Time != nil {
@@ -323,17 +473,19 @@ func (m *Model) buildSimpleEventLayout(slotsPerDay int) (map[int][]remind.Event,
 				columnBusy[s][column] = event.ID
 			}
 
-			// Add event to its starting slot only
-			// Check if this event is already in this slot (shouldn't happen)
-			alreadyInSlot := false
-			for _, existing := range eventsBySlot[globalSlot] {
-				if existing.ID == event.ID {
-					alreadyInSlot = true
-					break
+			// Add event to all slots it spans
+			for s := globalSlot; s < globalSlot+eventSlots; s++ {
+				// Check if this event is already in this slot (shouldn't happen)
+				alreadyInSlot := false
+				for _, existing := range eventsBySlot[s] {
+					if existing.ID == event.ID {
+						alreadyInSlot = true
+						break
+					}
 				}
-			}
-			if !alreadyInSlot {
-				eventsBySlot[globalSlot] = append(eventsBySlot[globalSlot], event)
+				if !alreadyInSlot {
+					eventsBySlot[s] = append(eventsBySlot[s], event)
+				}
 			}
 		}
 	}
@@ -482,18 +634,38 @@ func (m *Model) renderSelectedSlotEvents() string {
 		minute = (localSlot % 4) * 15
 	}
 
-	// Find events at this time
+	// Find events active during this time slot
 	var selectedEvents []remind.Event
 	for _, event := range m.events {
 		if event.Time != nil &&
 			event.Date.Year() == selectedDate.Year() &&
-			event.Date.YearDay() == selectedDate.YearDay() &&
-			event.Time.Hour() == hour {
-			// Check minute match
-			eventMin := event.Time.Minute()
-			if m.timeIncrement == 60 ||
-				(m.timeIncrement == 30 && eventMin >= minute && eventMin < minute+30) ||
-				(m.timeIncrement == 15 && eventMin >= minute && eventMin < minute+15) {
+			event.Date.YearDay() == selectedDate.YearDay() {
+
+			// Calculate event start and end times
+			eventStart := *event.Time
+			eventEnd := eventStart
+			if event.Duration != nil {
+				eventEnd = eventStart.Add(*event.Duration)
+			} else {
+				// Default to 1 hour if no duration specified
+				eventEnd = eventStart.Add(time.Hour)
+			}
+
+			// Calculate slot start and end times
+			slotStart := time.Date(selectedDate.Year(), selectedDate.Month(), selectedDate.Day(),
+				hour, minute, 0, 0, selectedDate.Location())
+			slotEnd := slotStart
+			if m.timeIncrement == 60 {
+				slotEnd = slotStart.Add(time.Hour)
+			} else if m.timeIncrement == 30 {
+				slotEnd = slotStart.Add(30 * time.Minute)
+			} else if m.timeIncrement == 15 {
+				slotEnd = slotStart.Add(15 * time.Minute)
+			}
+
+			// Check if event overlaps with the selected time slot
+			// Event is active if it starts before slot ends AND ends after slot starts
+			if eventStart.Before(slotEnd) && eventEnd.After(slotStart) {
 				selectedEvents = append(selectedEvents, event)
 			}
 		}

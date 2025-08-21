@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/lipgloss/v2"
 )
 
 func (m *Model) viewHelp() string {
@@ -192,6 +192,29 @@ func (m *Model) viewHelp() string {
 		help = append(help, m.styles.Normal.Render("Special:"))
 		help = append(help, m.styles.Help.Render("  i            - Toggle event IDs"))
 	}
+
+	// Add color legend for events
+	help = append(help, "")
+	help = append(help, m.styles.Normal.Render("Event Colors:"))
+
+	// P2 Task colors
+	help = append(help, m.styles.Help.Render("  P2 Tasks:"))
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(88)).Foreground(lipgloss.ANSIColor(15)).Render("  4+ hours  ")+" Long tasks")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(208)).Foreground(lipgloss.ANSIColor(15)).Render("  2-4 hours ")+" Medium tasks")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(220)).Foreground(lipgloss.ANSIColor(15)).Render("  1-2 hours ")+" Short tasks")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(48)).Foreground(lipgloss.ANSIColor(15)).Render("  <1 hour   ")+" Quick tasks")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(24)).Foreground(lipgloss.ANSIColor(15)).Render("  No duration")+" Default P2")
+
+	// Remind event colors
+	help = append(help, m.styles.Help.Render("  Remind Events:"))
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(52)).Foreground(lipgloss.ANSIColor(15)).Render("  4+ hours  ")+" Long events")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(63)).Foreground(lipgloss.ANSIColor(15)).Render("  2-4 hours ")+" Medium events")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(99)).Foreground(lipgloss.ANSIColor(15)).Render("  1-2 hours ")+" Short events")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(105)).Foreground(lipgloss.ANSIColor(15)).Render("  <1 hour   ")+" Brief events")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(196)).Foreground(lipgloss.ANSIColor(15)).Render("  High prio ")+" Important")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(214)).Foreground(lipgloss.ANSIColor(15)).Render("  Med prio  ")+" Medium")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(228)).Foreground(lipgloss.ANSIColor(15)).Render("  Low prio  ")+" Low priority")
+	help = append(help, "    "+lipgloss.NewStyle().Background(lipgloss.ANSIColor(240)).Foreground(lipgloss.ANSIColor(15)).Render("  No prio   ")+" Normal")
 
 	help = append(help, "")
 	// Show which keys actually exit help based on configuration
