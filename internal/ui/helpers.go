@@ -168,13 +168,6 @@ func (m *Model) renderSelectedSlotEvents() string {
 
 			// Calculate event start and end times
 			eventStart := *event.Time
-			eventEnd := eventStart
-			if event.Duration != nil {
-				eventEnd = eventStart.Add(*event.Duration)
-			} else {
-				// Default to 1 hour if no duration specified
-				eventEnd = eventStart.Add(time.Hour)
-			}
 
 			// Calculate slot start and end times
 			slotStart := time.Date(selectedDate.Year(), selectedDate.Month(), selectedDate.Day(),
@@ -189,9 +182,18 @@ func (m *Model) renderSelectedSlotEvents() string {
 			}
 
 			// Check if event overlaps with the selected time slot
-			// Event is active if it starts before slot ends AND ends after slot starts
-			if eventStart.Before(slotEnd) && eventEnd.After(slotStart) {
-				selectedEvents = append(selectedEvents, event)
+			if event.Duration != nil {
+				// For events with duration, check overlap
+				eventEnd := eventStart.Add(*event.Duration)
+				// Event is active if it starts before slot ends AND ends after slot starts
+				if eventStart.Before(slotEnd) && eventEnd.After(slotStart) {
+					selectedEvents = append(selectedEvents, event)
+				}
+			} else {
+				// For events without duration, only show if they start within this slot
+				if !eventStart.Before(slotStart) && eventStart.Before(slotEnd) {
+					selectedEvents = append(selectedEvents, event)
+				}
 			}
 		}
 	}
@@ -235,8 +237,10 @@ func (m *Model) renderSelectedSlotEvents() string {
 				// Format duration without seconds
 				hours := int(event.Duration.Hours())
 				minutes := int(event.Duration.Minutes()) % 60
-				if hours > 0 {
+				if hours > 0 && minutes > 0 {
 					eventTime += fmt.Sprintf(" (%dh %dm)", hours, minutes)
+				} else if hours > 0 {
+					eventTime += fmt.Sprintf(" (%dh)", hours)
 				} else {
 					eventTime += fmt.Sprintf(" (%dm)", minutes)
 				}
@@ -288,4 +292,3 @@ func (m *Model) renderSelectedSlotEvents() string {
 	boxStyle := m.styles.Border.Copy().Width(boxWidth)
 	return boxStyle.Render(content)
 }
-
