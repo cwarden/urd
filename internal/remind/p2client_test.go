@@ -8,84 +8,93 @@ import (
 	"time"
 )
 
-func TestP2ClientTaskParsing(t *testing.T) {
+func TestP2ClientWorkPeriodParsing(t *testing.T) {
 	client := NewP2Client()
 
 	testCases := []struct {
 		name     string
-		task     P2Task
+		period   P2WorkPeriod
 		expected Event
 	}{
 		{
-			name: "basic task with scheduled time",
-			task: P2Task{
-				ID:             "123",
-				Name:           "Test Task",
-				Description:    "Test description",
-				PackageID:      "test-package",
-				User:           "testuser",
-				EstimateLow:    2,
-				EstimateHigh:   4,
-				Done:           false,
-				OnHold:         false,
-				ScheduledStart: timePtr(time.Date(2025, 8, 21, 10, 0, 0, 0, time.Local)),
-				ExpectedEnd:    timePtr(time.Date(2025, 8, 21, 14, 0, 0, 0, time.Local)),
+			name: "basic work period",
+			period: P2WorkPeriod{
+				TaskID:     "123",
+				TaskName:   "Test Task",
+				PackageID:  "test-package",
+				User:       "testuser",
+				Start:      time.Date(2025, 8, 21, 10, 0, 0, 0, time.Local),
+				End:        time.Date(2025, 8, 21, 13, 0, 0, 0, time.Local),
+				Hours:      3.0,
+				IsComplete: false,
+				TotalHours: 5.0,
 			},
 			expected: Event{
-				ID:          "p2-123",
-				Description: "Test Task",
-				Body:        "Test description",
+				ID:          "p2-123-20250821-100000",
+				Description: "Test Task (3.0/5.0h)",
+				Body:        "",
 				Type:        EventTodo,
 				Priority:    PriorityNone,
 				Date:        time.Date(2025, 8, 21, 0, 0, 0, 0, time.Local),
 				Time:        timePtr(time.Date(2025, 8, 21, 10, 0, 0, 0, time.Local)),
 				Duration:    durationPtr(3 * time.Hour),
-				Tags:        []string{"test-package", "@testuser"},
+				Tags:        []string{"test-package", "@testuser", "PARTIAL"},
 			},
 		},
 		{
-			name: "task without user",
-			task: P2Task{
-				ID:             "456",
-				Name:           "No User Task",
-				PackageID:      "default",
-				EstimateLow:    1,
-				EstimateHigh:   1,
-				ScheduledStart: timePtr(time.Date(2025, 8, 21, 0, 0, 0, 0, time.Local)),
+			name: "complete work period",
+			period: P2WorkPeriod{
+				TaskID:     "456",
+				TaskName:   "Complete Task",
+				PackageID:  "default",
+				Start:      time.Date(2025, 8, 21, 14, 0, 0, 0, time.Local),
+				End:        time.Date(2025, 8, 21, 16, 0, 0, 0, time.Local),
+				Hours:      2.0,
+				IsComplete: true,
+				TotalHours: 2.0,
 			},
 			expected: Event{
-				ID:          "p2-456",
+				ID:          "p2-456-20250821-140000",
+				Description: "Complete Task",
+				Body:        "",
+				Type:        EventTodo,
+				Priority:    PriorityNone,
+				Date:        time.Date(2025, 8, 21, 0, 0, 0, 0, time.Local),
+				Time:        timePtr(time.Date(2025, 8, 21, 14, 0, 0, 0, time.Local)),
+				Duration:    durationPtr(2 * time.Hour),
+				Tags:        []string{}, // default package is not added as tag
+			},
+		},
+		{
+			name: "work period without user",
+			period: P2WorkPeriod{
+				TaskID:     "789",
+				TaskName:   "No User Task",
+				PackageID:  "backend",
+				User:       "",
+				Start:      time.Date(2025, 8, 21, 9, 0, 0, 0, time.Local),
+				End:        time.Date(2025, 8, 21, 10, 30, 0, 0, time.Local),
+				Hours:      1.5,
+				IsComplete: false,
+				TotalHours: 0, // No total means it's not partial
+			},
+			expected: Event{
+				ID:          "p2-789-20250821-090000",
 				Description: "No User Task",
+				Body:        "",
 				Type:        EventTodo,
 				Priority:    PriorityNone,
 				Date:        time.Date(2025, 8, 21, 0, 0, 0, 0, time.Local),
-				Duration:    durationPtr(1 * time.Hour),
-				Tags:        []string{},
-			},
-		},
-		{
-			name: "completed task",
-			task: P2Task{
-				ID:             "789",
-				Name:           "Done Task",
-				PackageID:      "test",
-				Done:           true,
-				ScheduledStart: timePtr(time.Date(2025, 8, 21, 0, 0, 0, 0, time.Local)),
-			},
-			expected: Event{
-				ID:          "p2-789",
-				Description: "Done Task",
-				Type:        EventTodo,
-				Priority:    PriorityNone,
-				Date:        time.Date(2025, 8, 21, 0, 0, 0, 0, time.Local),
-				Tags:        []string{"test", "DONE"},
+				Time:        timePtr(time.Date(2025, 8, 21, 9, 0, 0, 0, time.Local)),
+				Duration:    durationPtr(90 * time.Minute),
+				Tags:        []string{"backend"},
 			},
 		},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			result := client.taskToEvent(tc.task)
+			result := client.workPeriodToEvent(tc.period)
 
 			if result.ID != tc.expected.ID {
 				t.Errorf("ID mismatch: got %s, want %s", result.ID, tc.expected.ID)
@@ -127,7 +136,8 @@ func TestP2ClientTaskParsing(t *testing.T) {
 
 			// Check Tags
 			if len(result.Tags) != len(tc.expected.Tags) {
-				t.Errorf("Tags length mismatch: got %d, want %d", len(result.Tags), len(tc.expected.Tags))
+				t.Errorf("Tags length mismatch: got %d (%v), want %d (%v)",
+					len(result.Tags), result.Tags, len(tc.expected.Tags), tc.expected.Tags)
 			} else {
 				for i, tag := range tc.expected.Tags {
 					if i >= len(result.Tags) || result.Tags[i] != tag {
@@ -140,15 +150,14 @@ func TestP2ClientTaskParsing(t *testing.T) {
 }
 
 func TestP2ClientWithMockCommand(t *testing.T) {
-	// Create a mock p2 command that outputs test data
+	// Create a mock p2 command that outputs test work period data
 	mockScript := filepath.Join(t.TempDir(), "mock_p2")
 	mockContent := `#!/bin/sh
 cat <<EOF
-{"id":"1","name":"Test Task 1","package_id":"test","estimate_low":1,"estimate_high":2,"done":false,"on_hold":false,"scheduled_start":"2025-08-21T10:00:00-05:00"}
-{"id":"2","name":"Test Task 2","package_id":"test","user":"testuser","estimate_low":2,"estimate_high":4,"done":false,"on_hold":false,"scheduled_start":"2025-08-21T14:00:00-05:00"}
-{"id":"3","name":"Done Task","package_id":"test","estimate_low":1,"estimate_high":1,"done":true,"on_hold":false}
-{"id":"4","name":"On Hold Task","package_id":"test","estimate_low":1,"estimate_high":1,"done":false,"on_hold":true,"scheduled_start":"2025-08-21T10:00:00-05:00"}
-{"id":"5","name":"Future Task","package_id":"test","estimate_low":1,"estimate_high":1,"done":false,"on_hold":false,"scheduled_start":"2025-08-22T10:00:00-05:00"}
+{"task_id":"1","task_name":"Test Task 1","package_id":"test","user":"user1","start":"2025-08-21T10:00:00-05:00","end":"2025-08-21T12:00:00-05:00","hours":2.0,"is_complete":false,"total_hours":4.0}
+{"task_id":"2","task_name":"Test Task 2","package_id":"test","user":"user2","start":"2025-08-21T14:00:00-05:00","end":"2025-08-21T16:30:00-05:00","hours":2.5,"is_complete":true,"total_hours":2.5}
+{"task_id":"3","task_name":"Test Task 3","package_id":"backend","start":"2025-08-22T10:00:00-05:00","end":"2025-08-22T11:00:00-05:00","hours":1.0,"is_complete":false,"total_hours":3.0}
+{"task_id":"4","task_name":"Test Task 4","package_id":"frontend","user":"user3","start":"2025-08-21T08:00:00-05:00","end":"2025-08-21T09:30:00-05:00","hours":1.5,"is_complete":false,"total_hours":0}
 EOF
 `
 	if err := os.WriteFile(mockScript, []byte(mockContent), 0755); err != nil {
@@ -169,65 +178,101 @@ EOF
 		t.Fatalf("Failed to get events: %v", err)
 	}
 
-	// Should get 2 events (not the done one, on hold one, or future one)
-	if len(events) != 2 {
-		t.Errorf("Expected 2 events, got %d", len(events))
+	// Should get 3 events for Aug 21 (not the future one on Aug 22)
+	if len(events) != 3 {
+		t.Errorf("Expected 3 events, got %d", len(events))
 		for i, e := range events {
-			t.Logf("Event %d: %s (done=%v, onhold=%v, date=%s)",
-				i, e.Description,
-				containsTag(e.Tags, "DONE"),
-				false, // We don't track on_hold in tags
-				e.Date.Format("2006-01-02"))
+			t.Logf("Event %d: %s (date=%s, time=%v)",
+				i, e.Description, e.Date.Format("2006-01-02"),
+				e.Time)
 		}
 	}
 
-	// Check first event
-	if len(events) > 0 {
-		event := events[0]
-		if event.Description != "Test Task 1" {
-			t.Errorf("Expected description 'Test Task 1', got '%s'", event.Description)
+	// Check that events have correct structure
+	foundPartial := false
+	foundComplete := false
+	for _, event := range events {
+		if containsTag(event.Tags, "PARTIAL") {
+			foundPartial = true
+			// Check that partial task has hours indicator in description
+			if event.Description == "Test Task 1 (2.0/4.0h)" {
+				// Expected format
+			} else {
+				t.Errorf("Partial task has incorrect description: %s", event.Description)
+			}
 		}
-		if event.ID != "p2-1" {
-			t.Errorf("Expected ID 'p2-1', got '%s'", event.ID)
-		}
-		if event.Type != EventTodo {
-			t.Errorf("Expected type EventTodo, got %v", event.Type)
-		}
-
-		// Check tags
-		if !containsTag(event.Tags, "test") {
-			t.Errorf("Expected package tag 'test' in tags %v", event.Tags)
+		if event.Description == "Test Task 2" && !containsTag(event.Tags, "PARTIAL") {
+			foundComplete = true
 		}
 	}
 
-	// Check second event has user tag
-	if len(events) > 1 {
-		event := events[1]
-		if !containsTag(event.Tags, "@testuser") {
-			t.Errorf("Expected user tag '@testuser' in tags %v", event.Tags)
-		}
+	if !foundPartial {
+		t.Error("Expected to find a partial work period")
+	}
+	if !foundComplete {
+		t.Error("Expected to find a complete work period")
 	}
 }
 
 func TestP2ClientJSONParsing(t *testing.T) {
-	// Test parsing of JSON lines
+	// Test parsing of JSON lines for work periods
 	jsonLines := []string{
-		`{"id":"1","name":"Task 1","package_id":"pkg1","estimate_low":1,"estimate_high":2,"done":false,"on_hold":false}`,
-		`{"id":"2","name":"Task 2","package_id":"pkg2","user":"user1","estimate_low":3,"estimate_high":5,"done":false,"on_hold":false,"scheduled_start":"2025-08-21T10:00:00Z"}`,
+		`{"task_id":"1","task_name":"Task 1","package_id":"pkg1","user":"user1","start":"2025-08-21T10:00:00Z","end":"2025-08-21T12:00:00Z","hours":2.0,"is_complete":false,"total_hours":5.0}`,
+		`{"task_id":"2","task_name":"Task 2","package_id":"pkg2","start":"2025-08-21T14:00:00Z","end":"2025-08-21T15:30:00Z","hours":1.5,"is_complete":true,"total_hours":1.5}`,
 		`{"invalid json`,
-		`{"id":"3","name":"Task 3","package_id":"pkg3","done":true,"on_hold":false}`,
+		`{"task_id":"3","task_name":"Task 3","package_id":"pkg3","user":"user2","start":"2025-08-21T16:00:00Z","end":"2025-08-21T17:00:00Z","hours":1.0,"is_complete":false,"total_hours":0}`,
 	}
 
-	validTasks := 0
+	validPeriods := 0
 	for _, line := range jsonLines {
-		var task P2Task
-		if err := json.Unmarshal([]byte(line), &task); err == nil {
-			validTasks++
+		var period P2WorkPeriod
+		if err := json.Unmarshal([]byte(line), &period); err == nil {
+			validPeriods++
 		}
 	}
 
-	if validTasks != 3 {
-		t.Errorf("Expected 3 valid tasks, got %d", validTasks)
+	if validPeriods != 3 {
+		t.Errorf("Expected 3 valid work periods, got %d", validPeriods)
+	}
+}
+
+func TestP2ClientDateRangeFiltering(t *testing.T) {
+	// Create a mock p2 command with work periods spanning multiple days
+	mockScript := filepath.Join(t.TempDir(), "mock_p2")
+	mockContent := `#!/bin/sh
+cat <<EOF
+{"task_id":"1","task_name":"Day 1 Morning","package_id":"test","start":"2025-08-20T09:00:00-05:00","end":"2025-08-20T11:00:00-05:00","hours":2.0,"is_complete":true,"total_hours":2.0}
+{"task_id":"2","task_name":"Day 1 Afternoon","package_id":"test","start":"2025-08-20T14:00:00-05:00","end":"2025-08-20T17:00:00-05:00","hours":3.0,"is_complete":true,"total_hours":3.0}
+{"task_id":"3","task_name":"Day 2 All Day","package_id":"test","start":"2025-08-21T08:00:00-05:00","end":"2025-08-21T17:00:00-05:00","hours":9.0,"is_complete":true,"total_hours":9.0}
+{"task_id":"4","task_name":"Day 3 Morning","package_id":"test","start":"2025-08-22T10:00:00-05:00","end":"2025-08-22T12:00:00-05:00","hours":2.0,"is_complete":false,"total_hours":4.0}
+EOF
+`
+	if err := os.WriteFile(mockScript, []byte(mockContent), 0755); err != nil {
+		t.Fatalf("Failed to create mock script: %v", err)
+	}
+
+	client := NewP2Client()
+	client.P2Path = mockScript
+	client.SetFiles([]string{"dummy.rec"})
+
+	// Test: Get only Day 2 events
+	start := time.Date(2025, 8, 21, 0, 0, 0, 0, time.Local)
+	end := time.Date(2025, 8, 21, 23, 59, 59, 0, time.Local)
+
+	events, err := client.GetEvents(start, end)
+	if err != nil {
+		t.Fatalf("Failed to get events: %v", err)
+	}
+
+	if len(events) != 1 {
+		t.Errorf("Expected 1 event for Day 2, got %d", len(events))
+		for _, e := range events {
+			t.Logf("Event: %s on %s", e.Description, e.Date.Format("2006-01-02"))
+		}
+	}
+
+	if len(events) > 0 && events[0].Description != "Day 2 All Day" {
+		t.Errorf("Expected 'Day 2 All Day', got '%s'", events[0].Description)
 	}
 }
 
@@ -269,6 +314,47 @@ func TestCompositeSource(t *testing.T) {
 	for _, event := range events {
 		if idMap[event.ID] {
 			t.Errorf("Duplicate event ID found: %s", event.ID)
+		}
+		idMap[event.ID] = true
+	}
+}
+
+func TestCompositeSourceDeduplication(t *testing.T) {
+	// Create mock sources with overlapping IDs
+	source1 := &mockSource{
+		events: []Event{
+			{ID: "shared-1", Description: "Event from Source 1", Date: time.Now()},
+			{ID: "unique-1", Description: "Unique to Source 1", Date: time.Now()},
+		},
+	}
+
+	source2 := &mockSource{
+		events: []Event{
+			{ID: "shared-1", Description: "Event from Source 2", Date: time.Now()}, // Same ID
+			{ID: "unique-2", Description: "Unique to Source 2", Date: time.Now()},
+		},
+	}
+
+	composite := NewCompositeSource(source1, source2)
+
+	start := time.Now().AddDate(0, 0, -1)
+	end := time.Now().AddDate(0, 0, 1)
+
+	events, err := composite.GetEvents(start, end)
+	if err != nil {
+		t.Fatalf("Failed to get events: %v", err)
+	}
+
+	// Should get 3 events (one duplicate removed)
+	if len(events) != 3 {
+		t.Errorf("Expected 3 events after deduplication, got %d", len(events))
+	}
+
+	// Verify no duplicate IDs
+	idMap := make(map[string]bool)
+	for _, event := range events {
+		if idMap[event.ID] {
+			t.Errorf("Duplicate event ID found after deduplication: %s", event.ID)
 		}
 		idMap[event.ID] = true
 	}

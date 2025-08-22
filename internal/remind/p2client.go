@@ -8,26 +8,24 @@ import (
 	"time"
 )
 
-// P2Task represents a task from p2 list --json output
-type P2Task struct {
-	ID             string     `json:"id"`
-	Name           string     `json:"name"`
-	Description    string     `json:"description"`
-	PackageID      string     `json:"package_id"`
-	User           string     `json:"user"`
-	EstimateLow    float64    `json:"estimate_low"`
-	EstimateHigh   float64    `json:"estimate_high"`
-	Done           bool       `json:"done"`
-	OnHold         bool       `json:"on_hold"`
-	ScheduledStart *time.Time `json:"scheduled_start"`
-	ExpectedEnd    *time.Time `json:"expected_end"`
+// P2WorkPeriod represents a work period from p2 work --json output
+type P2WorkPeriod struct {
+	TaskID     string    `json:"task_id"`
+	TaskName   string    `json:"task_name"`
+	User       string    `json:"user"`
+	PackageID  string    `json:"package_id"`
+	Start      time.Time `json:"start"`
+	End        time.Time `json:"end"`
+	Hours      float64   `json:"hours"`
+	IsComplete bool      `json:"is_complete"`
+	TotalHours float64   `json:"total_hours"`
 }
 
-// P2Client is a ReminderSource that reads tasks from p2
+// P2Client is a ReminderSource that reads work periods from p2
 type P2Client struct {
 	P2Path    string // Path to p2 binary
 	TasksFile string // Path to tasks.rec file
-	ShowAll   bool   // Show completed tasks
+	ShowAll   bool   // Show all periods (not currently used with work command)
 	watcher   *FileWatcher
 	eventChan chan FileChangeEvent
 }
@@ -48,13 +46,10 @@ func (c *P2Client) SetFiles(files []string) {
 	}
 }
 
-// GetEvents implements ReminderSource - returns p2 tasks as events
+// GetEvents implements ReminderSource - returns p2 work periods as events
 func (c *P2Client) GetEvents(start, end time.Time) ([]Event, error) {
-	// Build command
-	args := []string{"tasks", "list", "--json"}
-	if c.ShowAll {
-		args = append(args, "--all")
-	}
+	// Build command - use 'work' instead of 'tasks list'
+	args := []string{"work", "--json"}
 	if c.TasksFile != "" && c.TasksFile != "tasks.rec" {
 		args = append(args, c.TasksFile)
 	}
@@ -73,31 +68,20 @@ func (c *P2Client) GetEvents(start, end time.Time) ([]Event, error) {
 	scanner := bufio.NewScanner(stdout)
 
 	for scanner.Scan() {
-		var task P2Task
-		if err := json.Unmarshal(scanner.Bytes(), &task); err != nil {
+		var period P2WorkPeriod
+		if err := json.Unmarshal(scanner.Bytes(), &period); err != nil {
 			continue // Skip malformed lines
 		}
 
-		// Skip completed tasks unless ShowAll is true
-		if task.Done && !c.ShowAll {
-			continue
-		}
+		// Convert P2 work period to Event
+		event := c.workPeriodToEvent(period)
 
-		// Skip tasks on hold
-		if task.OnHold {
-			continue
-		}
+		// Filter by date range
+		// Check if the work period's start date falls within the requested date range
+		periodDate := time.Date(period.Start.Year(), period.Start.Month(), period.Start.Day(), 0, 0, 0, 0, period.Start.Location())
 
-		// Convert P2 task to Event
-		event := c.taskToEvent(task)
-
-		// Filter by date range (comparing dates only, not times)
-		// Normalize dates to midnight in local time
-		eventDate := time.Date(event.Date.Year(), event.Date.Month(), event.Date.Day(), 0, 0, 0, 0, event.Date.Location())
-		startDate := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, start.Location())
-		endDate := time.Date(end.Year(), end.Month(), end.Day(), 23, 59, 59, 999999999, end.Location())
-
-		if eventDate.Before(startDate) || eventDate.After(endDate) {
+		// Skip if the period's date is outside the requested range
+		if periodDate.Before(start) || periodDate.After(end) {
 			continue
 		}
 
@@ -111,53 +95,47 @@ func (c *P2Client) GetEvents(start, end time.Time) ([]Event, error) {
 	return events, scanner.Err()
 }
 
-// taskToEvent converts a P2Task to a remind Event
-func (c *P2Client) taskToEvent(task P2Task) Event {
+// workPeriodToEvent converts a P2WorkPeriod to a remind Event
+func (c *P2Client) workPeriodToEvent(period P2WorkPeriod) Event {
+	// Create a unique ID for this work period
+	periodID := fmt.Sprintf("p2-%s-%s", period.TaskID, period.Start.Format("20060102-150405"))
+
+	// Build description with partial indicator if needed
+	description := period.TaskName
+	if !period.IsComplete && period.TotalHours > 0 {
+		description = fmt.Sprintf("%s (%.1f/%.1fh)", period.TaskName, period.Hours, period.TotalHours)
+	}
+
 	event := Event{
-		ID:          fmt.Sprintf("p2-%s", task.ID),
-		Description: task.Name,
-		Body:        task.Description,
+		ID:          periodID,
+		Description: description,
+		Body:        "", // Work periods don't have descriptions
 		Type:        EventTodo,
 		Priority:    PriorityNone,
 		Tags:        []string{},
+		// Set the date to midnight of the work period's day
+		Date: time.Date(period.Start.Year(), period.Start.Month(), period.Start.Day(), 0, 0, 0, 0, period.Start.Location()),
+		// Set the actual start time
+		Time: &period.Start,
 	}
 
-	// Use scheduled start date if available, otherwise use today
-	if task.ScheduledStart != nil {
-		// Set date to midnight of the scheduled day in local time
-		t := *task.ScheduledStart
-		event.Date = time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, t.Location())
-		// Extract time if it's not midnight
-		if t.Hour() != 0 || t.Minute() != 0 {
-			eventTime := *task.ScheduledStart
-			event.Time = &eventTime
-		}
-	} else {
-		now := time.Now()
-		event.Date = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	}
-
-	// Calculate duration from estimates
-	if task.EstimateHigh > 0 {
-		// Use the average of low and high estimates
-		avgHours := (task.EstimateLow + task.EstimateHigh) / 2
-		duration := time.Duration(avgHours * float64(time.Hour))
-		event.Duration = &duration
-	}
+	// Calculate duration from start to end
+	duration := period.End.Sub(period.Start)
+	event.Duration = &duration
 
 	// Add package as a tag
-	if task.PackageID != "" && task.PackageID != "default" {
-		event.Tags = append(event.Tags, task.PackageID)
+	if period.PackageID != "" && period.PackageID != "default" {
+		event.Tags = append(event.Tags, period.PackageID)
 	}
 
 	// Add user as a tag if present
-	if task.User != "" {
-		event.Tags = append(event.Tags, fmt.Sprintf("@%s", task.User))
+	if period.User != "" {
+		event.Tags = append(event.Tags, fmt.Sprintf("@%s", period.User))
 	}
 
-	// Mark as completed if done
-	if task.Done {
-		event.Tags = append(event.Tags, "DONE")
+	// Add partial tag if this is a partial work period
+	if !period.IsComplete && period.TotalHours > 0 {
+		event.Tags = append(event.Tags, "PARTIAL")
 	}
 
 	return event
