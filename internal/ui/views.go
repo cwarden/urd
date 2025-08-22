@@ -374,24 +374,3 @@ func (m *Model) viewSearch() string {
 
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
-
-func (m *Model) renderStatusBar() string {
-	left := fmt.Sprintf(" %s | Events: %d",
-		m.selectedDate.Format("Jan 2, 2006"),
-		len(m.events))
-
-	right := "? for help | q to quit"
-
-	if m.message != "" {
-		right = m.styles.Message.Render(m.message)
-	}
-
-	width := m.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if width < 0 {
-		width = 0
-	}
-
-	middle := strings.Repeat(" ", width)
-
-	return m.styles.Help.Render(left + middle + right)
-}

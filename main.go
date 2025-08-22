@@ -11,7 +11,7 @@ import (
 	"github.com/cwarden/urd/internal/remind"
 	"github.com/cwarden/urd/internal/ui"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea/v2"
 )
 
 func main() {

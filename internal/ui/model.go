@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 
@@ -10,7 +11,7 @@ import (
 	"github.com/cwarden/urd/internal/parser"
 	"github.com/cwarden/urd/internal/remind"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "github.com/charmbracelet/bubbletea/v2"
 	"github.com/charmbracelet/lipgloss/v2"
 )
 
@@ -89,18 +90,6 @@ type Styles struct {
 	Help     lipgloss.Style
 	Message  lipgloss.Style
 	Border   lipgloss.Style
-}
-
-func NewModel(cfg *config.Config, source remind.ReminderSource) *Model {
-	// Try to extract remind client if it's available
-	var remindClient *remind.Client
-	if client, ok := source.(*remind.Client); ok {
-		remindClient = client
-	}
-	// Check if it's a composite source containing a remind client
-	// This would require exposing the sources in CompositeSource, but for now we'll leave it
-
-	return NewModelWithRemind(cfg, source, remindClient)
 }
 
 func NewModelWithRemind(cfg *config.Config, source remind.ReminderSource, remindClient *remind.Client) *Model {
@@ -186,7 +175,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, nil
 
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKeyPress(msg)
 
 	case tickMsg:
@@ -230,7 +219,7 @@ func (m *Model) View() string {
 
 	switch m.mode {
 	case ViewHourly:
-		return m.viewHourlySchedule()
+		return m.renderCanvasView()
 	case ViewHelp:
 		return m.viewHelp()
 	case ViewEventEditor:
@@ -242,11 +231,11 @@ func (m *Model) View() string {
 	case ViewSearch:
 		return m.viewSearch()
 	default:
-		return m.viewHourlySchedule()
+		panic("unhandled mode")
 	}
 }
 
-func (m *Model) handleKeyPress(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Check configured key bindings
 	key := msg.String()
 
@@ -604,24 +593,17 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 			selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
 
-			// Find the selected untimed event
-			eventIndex := 0
-			for _, event := range m.events {
-				if event.Time == nil &&
-					event.Date.Year() == selectedDate.Year() &&
-					event.Date.YearDay() == selectedDate.YearDay() {
-					if eventIndex == m.selectedUntimedIndex {
-						// Edit this event
-						file, err := m.findEventFile(event)
-						if err != nil {
-							m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
-						} else {
-							m.showMessage("Launching editor for untimed reminder...")
-							return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
-						}
-						break
-					}
-					eventIndex++
+			// Get sorted untimed events and find the selected one
+			untimedEvents := m.getSortedUntimedEvents(selectedDate)
+			if m.selectedUntimedIndex < len(untimedEvents) {
+				event := untimedEvents[m.selectedUntimedIndex]
+				// Edit this event
+				file, err := m.findEventFile(event)
+				if err != nil {
+					m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
+				} else {
+					m.showMessage("Launching editor for untimed reminder...")
+					return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
 				}
 			}
 			return m, nil
@@ -810,24 +792,17 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 			selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
 
-			// Find the selected untimed event
-			eventIndex := 0
-			for _, event := range m.events {
-				if event.Time == nil &&
-					event.Date.Year() == selectedDate.Year() &&
-					event.Date.YearDay() == selectedDate.YearDay() {
-					if eventIndex == m.selectedUntimedIndex {
-						// Edit this event
-						file, err := m.findEventFile(event)
-						if err != nil {
-							m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
-						} else {
-							m.showMessage("Launching editor for untimed reminder...")
-							return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
-						}
-						break
-					}
-					eventIndex++
+			// Get sorted untimed events and find the selected one
+			untimedEvents := m.getSortedUntimedEvents(selectedDate)
+			if m.selectedUntimedIndex < len(untimedEvents) {
+				event := untimedEvents[m.selectedUntimedIndex]
+				// Edit this event
+				file, err := m.findEventFile(event)
+				if err != nil {
+					m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
+				} else {
+					m.showMessage("Launching editor for untimed reminder...")
+					return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
 				}
 			}
 			return m, nil
@@ -883,8 +858,14 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 
 		} else if len(events) == 1 {
-			// Single event - edit it directly
+			// Single event - check if it's a P2 task
 			event := events[0]
+			if strings.HasPrefix(event.ID, "p2-") {
+				// P2 task - do nothing for now
+				m.showMessage("P2 tasks cannot be edited from here")
+				return m, nil
+			}
+			// Regular event - edit it directly
 			file, err := m.findEventFile(event)
 			if err != nil {
 				m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
@@ -894,10 +875,34 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 
 		} else {
-			// Multiple events - show selector
-			m.eventChoices = events
-			m.selectedEventIndex = 0
-			m.mode = ViewEventSelector
+			// Multiple events - filter out P2 tasks before showing selector
+			var editableEvents []remind.Event
+			for _, event := range events {
+				if !strings.HasPrefix(event.ID, "p2-") {
+					editableEvents = append(editableEvents, event)
+				}
+			}
+
+			if len(editableEvents) == 0 {
+				// All events are P2 tasks
+				m.showMessage("P2 tasks cannot be edited from here")
+				return m, nil
+			} else if len(editableEvents) == 1 {
+				// Single editable event - edit it directly
+				event := editableEvents[0]
+				file, err := m.findEventFile(event)
+				if err != nil {
+					m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
+				} else {
+					m.showMessage("Launching editor...")
+					return m, m.editCmd(m.config.EditOldCommand, file, event.LineNumber)
+				}
+			} else {
+				// Multiple editable events - show selector
+				m.eventChoices = editableEvents
+				m.selectedEventIndex = 0
+				m.mode = ViewEventSelector
+			}
 			return m, nil
 		}
 		return m, nil
@@ -1197,7 +1202,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	// Handle tab key for switching focus between timed and untimed reminders
-	if key == "tab" || key == "<tab>" {
+	if key == "tab" || key == "<tab>" || action == "next_area" {
 		// Toggle focus between timed slots and untimed reminders
 		m.focusUntimed = !m.focusUntimed
 		if m.focusUntimed {
@@ -1227,15 +1232,9 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
 
-		// Count untimed events for this day
-		untimedCount := 0
-		for _, event := range m.events {
-			if event.Time == nil &&
-				event.Date.Year() == selectedDate.Year() &&
-				event.Date.YearDay() == selectedDate.YearDay() {
-				untimedCount++
-			}
-		}
+		// Get sorted untimed events for this day
+		untimedEvents := m.getSortedUntimedEvents(selectedDate)
+		untimedCount := len(untimedEvents)
 
 		// Handle navigation actions when focused on untimed reminders
 		switch action {
@@ -1269,7 +1268,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) handleEventSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleEventSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Get the key string and action
 	key := msg.String()
 	// Handle special key representations
@@ -1313,6 +1312,14 @@ func (m *Model) handleEventSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Select the current event and edit it
 		if m.selectedEventIndex < len(m.eventChoices) {
 			event := m.eventChoices[m.selectedEventIndex]
+			// Check if it's a P2 task (shouldn't happen since we filter them, but just in case)
+			if strings.HasPrefix(event.ID, "p2-") {
+				m.showMessage("P2 tasks cannot be edited from here")
+				m.mode = ViewHourly
+				m.eventChoices = nil
+				m.selectedEventIndex = 0
+				return m, nil
+			}
 			file, err := m.findEventFile(event)
 			if err != nil {
 				m.showMessage(fmt.Sprintf("Failed to find event file: %v", err))
@@ -1374,8 +1381,8 @@ func (m *Model) handleEventSelectorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) handleEditorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
+func (m *Model) handleEditorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.Code {
 	case tea.KeyEscape:
 		m.mode = ViewHourly
 		return m, nil
@@ -1421,23 +1428,23 @@ func (m *Model) handleEditorKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursorPos++
 		}
 
-	case tea.KeyRunes:
-		for _, r := range msg.Runes {
-			m.inputBuffer = m.inputBuffer[:m.cursorPos] + string(r) + m.inputBuffer[m.cursorPos:]
-			m.cursorPos++
-		}
-
 	case tea.KeySpace:
 		// Handle space explicitly
 		m.inputBuffer = m.inputBuffer[:m.cursorPos] + " " + m.inputBuffer[m.cursorPos:]
 		m.cursorPos++
+
+	default:
+		for _, r := range msg.Text {
+			m.inputBuffer = m.inputBuffer[:m.cursorPos] + string(r) + m.inputBuffer[m.cursorPos:]
+			m.cursorPos++
+		}
 	}
 
 	return m, nil
 }
 
-func (m *Model) handleGotoDateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
+func (m *Model) handleGotoDateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.Code {
 	case tea.KeyEscape:
 		m.mode = ViewHourly
 		return m, nil
@@ -1526,21 +1533,21 @@ func (m *Model) handleGotoDateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursorPos < len(m.inputBuffer) {
 			m.cursorPos++
 		}
-	case tea.KeyRunes:
-		for _, r := range msg.Runes {
-			m.inputBuffer = m.inputBuffer[:m.cursorPos] + string(r) + m.inputBuffer[m.cursorPos:]
-			m.cursorPos++
-		}
 	case tea.KeySpace:
 		// Handle space explicitly
 		m.inputBuffer = m.inputBuffer[:m.cursorPos] + " " + m.inputBuffer[m.cursorPos:]
 		m.cursorPos++
+	default:
+		for _, r := range msg.Text {
+			m.inputBuffer = m.inputBuffer[:m.cursorPos] + string(r) + m.inputBuffer[m.cursorPos:]
+			m.cursorPos++
+		}
 	}
 	return m, nil
 }
 
-func (m *Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
+func (m *Model) handleSearchKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.Code {
 	case tea.KeyEscape:
 		m.mode = ViewHourly
 		return m, nil
@@ -1571,15 +1578,15 @@ func (m *Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursorPos < len(m.inputBuffer) {
 			m.cursorPos++
 		}
-	case tea.KeyRunes:
-		for _, r := range msg.Runes {
-			m.inputBuffer = m.inputBuffer[:m.cursorPos] + string(r) + m.inputBuffer[m.cursorPos:]
-			m.cursorPos++
-		}
 	case tea.KeySpace:
 		// Handle space explicitly
 		m.inputBuffer = m.inputBuffer[:m.cursorPos] + " " + m.inputBuffer[m.cursorPos:]
 		m.cursorPos++
+	default:
+		for _, r := range msg.Text {
+			m.inputBuffer = m.inputBuffer[:m.cursorPos] + string(r) + m.inputBuffer[m.cursorPos:]
+			m.cursorPos++
+		}
 	}
 
 	// Handle 'n' key even in search mode for next result
@@ -1591,36 +1598,6 @@ func (m *Model) handleSearchKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
-}
-
-func (m *Model) performSearch() {
-	if m.searchTerm == "" {
-		m.searchResults = nil
-		return
-	}
-
-	// Search through all events
-	var results []remind.Event
-	searchLower := strings.ToLower(m.searchTerm)
-
-	for _, event := range m.events {
-		// Search in description
-		if strings.Contains(strings.ToLower(event.Description), searchLower) {
-			results = append(results, event)
-			continue
-		}
-
-		// Search in tags
-		for _, tag := range event.Tags {
-			if strings.Contains(strings.ToLower(tag), searchLower) {
-				results = append(results, event)
-				break
-			}
-		}
-	}
-
-	m.searchResults = results
-	m.lastSearchDate = time.Now()
 }
 
 // findNextSearchResult searches forward from current position for next matching event
@@ -1805,88 +1782,6 @@ func (m *Model) findNextSearchResult() bool {
 	return false
 }
 
-func (m *Model) jumpToSearchResult() {
-	if len(m.searchResults) == 0 || m.currentSearchHit >= len(m.searchResults) {
-		return
-	}
-
-	event := m.searchResults[m.currentSearchHit]
-	oldDate := m.selectedDate
-
-	// Jump to the event's date
-	m.selectedDate = event.Date
-
-	// If we changed dates, reload events and refresh search results
-	if !oldDate.Equal(event.Date) {
-		m.loadEventsForSchedule()
-		// Re-run the search to update search results with new events
-		if m.searchTerm != "" {
-			m.performSearch()
-			// Find the event in the new search results
-			for i, result := range m.searchResults {
-				if result.ID == event.ID {
-					m.currentSearchHit = i
-					break
-				}
-			}
-		}
-	}
-
-	// If it's a timed event, jump to its time slot
-	if event.Time != nil {
-		slotsPerDay := 24
-		if m.timeIncrement == 30 {
-			slotsPerDay = 48
-		} else if m.timeIncrement == 15 {
-			slotsPerDay = 96
-		}
-
-		// Calculate the day offset and time slot
-		baseDate := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), m.selectedDate.Day(), 0, 0, 0, 0, m.selectedDate.Location())
-		eventDate := time.Date(event.Date.Year(), event.Date.Month(), event.Date.Day(), 0, 0, 0, 0, event.Date.Location())
-		dayDiff := int(eventDate.Sub(baseDate).Hours() / 24)
-
-		hour := event.Time.Hour()
-		minute := event.Time.Minute()
-		localSlot := hour
-		if m.timeIncrement == 30 {
-			localSlot = hour*2 + minute/30
-		} else if m.timeIncrement == 15 {
-			localSlot = hour*4 + minute/15
-		}
-
-		m.selectedSlot = dayDiff*slotsPerDay + localSlot
-
-		// Adjust view to show the selected slot
-		visibleSlots := m.getVisibleSlots()
-		m.topSlot = m.selectedSlot - visibleSlots/2
-		if m.topSlot < 0 {
-			m.topSlot = 0
-		}
-	} else {
-		// For untimed events, focus on untimed reminders
-		m.focusUntimed = true
-		// Find the index of this event in today's untimed events
-		eventIndex := 0
-		for _, e := range m.events {
-			if e.Time == nil &&
-				e.Date.Year() == event.Date.Year() &&
-				e.Date.YearDay() == event.Date.YearDay() {
-				if e.ID == event.ID {
-					m.selectedUntimedIndex = eventIndex
-					break
-				}
-				eventIndex++
-			}
-		}
-	}
-
-	// Reload events for the new date if needed
-	if m.needsEventReload() {
-		m.loadEventsForSchedule()
-	}
-}
-
 func (m *Model) loadEvents() {
 	// Get events for the selected month in hourly view
 	start := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), 1, 0, 0, 0, 0, time.Local)
@@ -1986,6 +1881,31 @@ func (m *Model) getEventAtSlot(slot int) *remind.Event {
 	return nil
 }
 
+// getSortedUntimedEvents returns untimed events for the given date, sorted consistently
+func (m *Model) getSortedUntimedEvents(date time.Time) []remind.Event {
+	var untimedEvents []remind.Event
+	for _, event := range m.events {
+		if event.Time == nil &&
+			event.Date.Year() == date.Year() &&
+			event.Date.Month() == date.Month() &&
+			event.Date.Day() == date.Day() {
+			untimedEvents = append(untimedEvents, event)
+		}
+	}
+
+	// Sort for consistent ordering
+	sort.Slice(untimedEvents, func(i, j int) bool {
+		// Sort by priority first (higher priority first)
+		if untimedEvents[i].Priority != untimedEvents[j].Priority {
+			return untimedEvents[i].Priority > untimedEvents[j].Priority
+		}
+		// Then by description alphabetically
+		return untimedEvents[i].Description < untimedEvents[j].Description
+	})
+
+	return untimedEvents
+}
+
 // getEventsAtSlot returns all events at the specified time slot
 func (m *Model) getEventsAtSlot(slot int) []remind.Event {
 	var events []remind.Event
@@ -2027,15 +1947,29 @@ func (m *Model) getEventsAtSlot(slot int) []remind.Event {
 			eventHour := event.Time.Hour()
 			eventMinute := event.Time.Minute()
 
-			// Calculate which slot this event should be in
-			eventSlot := eventHour
+			// Calculate which slot this event starts in
+			eventStartSlot := eventHour
 			if m.timeIncrement == 30 {
-				eventSlot = eventHour*2 + eventMinute/30
+				eventStartSlot = eventHour*2 + eventMinute/30
 			} else if m.timeIncrement == 15 {
-				eventSlot = eventHour*4 + eventMinute/15
+				eventStartSlot = eventHour*4 + eventMinute/15
 			}
 
-			if eventSlot == localSlot {
+			// Calculate how many slots this event spans
+			eventSlots := 1
+			if event.Duration != nil {
+				durationMinutes := int(event.Duration.Minutes())
+				if m.timeIncrement == 30 {
+					eventSlots = (durationMinutes + 29) / 30
+				} else if m.timeIncrement == 15 {
+					eventSlots = (durationMinutes + 14) / 15
+				} else {
+					eventSlots = (durationMinutes + 59) / 60
+				}
+			}
+
+			// Check if the current slot falls within the event's time range
+			if localSlot >= eventStartSlot && localSlot < eventStartSlot+eventSlots {
 				events = append(events, event)
 			}
 		}
@@ -2083,10 +2017,6 @@ func (m *Model) getActionForKey(key string) string {
 	return ""
 }
 
-func (m *Model) hasRemindClient() bool {
-	return m.remindClient != nil
-}
-
 func (m *Model) showMessage(msg string) {
 	m.message = msg
 	if m.messageTimer != nil {
@@ -2099,7 +2029,8 @@ func (m *Model) showMessage(msg string) {
 
 // getVisibleSlots returns the number of slots that can be displayed
 func (m *Model) getVisibleSlots() int {
-	statusBarHeight := m.getStatusBarHeight()
+	// Reserve 2 lines for status bar (current time and help)
+	statusBarHeight := 2
 	visibleSlots := m.height - statusBarHeight
 	if visibleSlots < 10 {
 		visibleSlots = 10

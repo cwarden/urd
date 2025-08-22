@@ -96,6 +96,7 @@ func DefaultConfig() *Config {
 			"q":       "quick_add",
 			"?":       "help",
 			"Q":       "quit",
+			"<tab>":   "next_area",
 		},
 
 		StartupView:   "month",
