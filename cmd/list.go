@@ -20,6 +20,11 @@ func init() {
 }
 
 func runList(cmd *cobra.Command, args []string) error {
+	// Ensure config is loaded
+	if cfg == nil {
+		initConfig()
+	}
+
 	// Initialize reminder source(s)
 	var source remind.ReminderSource
 
@@ -44,8 +49,9 @@ func runList(cmd *cobra.Command, args []string) error {
 		source = remindClient
 	}
 
-	// Get today's events
-	today := time.Now()
+	// Get today's events - normalize to midnight for date comparison
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	tomorrow := today.AddDate(0, 0, 1)
 	events, err := source.GetEvents(today, tomorrow)
 	if err != nil {
