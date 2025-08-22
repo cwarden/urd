@@ -44,10 +44,10 @@ func (m *Model) renderCanvasView() string {
 	eventLayers := m.createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eventAreaWidth)
 	layers = append(layers, eventLayers...)
 
-	// Create sidebar layer
-	sidebarWidth := m.width - scheduleWidth
+	// Create sidebar layer with 1 column spacing
+	sidebarWidth := m.width - scheduleWidth - 1
 	if sidebarWidth > 0 {
-		sidebarLayer := m.createSidebarLayer(scheduleWidth, sidebarWidth)
+		sidebarLayer := m.createSidebarLayer(scheduleWidth+1, sidebarWidth)
 		layers = append(layers, sidebarLayer)
 	}
 
