@@ -11,6 +11,25 @@ import (
 	"github.com/muesli/reflow/wordwrap"
 )
 
+// getEventTextColor returns an appropriate text color for the given background color
+func (m *Model) getEventTextColor(bgColor lipgloss.ANSIColor) lipgloss.ANSIColor {
+	// Use dark text for light backgrounds
+	lightBackgrounds := map[lipgloss.ANSIColor]bool{
+		48:  true, // Light green
+		220: true, // Yellow
+		228: true, // Light yellow
+		214: true, // Orange-yellow
+		105: true, // Very light purple
+	}
+
+	if lightBackgrounds[bgColor] {
+		return lipgloss.ANSIColor(0) // Black text for better contrast
+	}
+
+	// Use white text for dark backgrounds
+	return lipgloss.ANSIColor(15) // White text
+}
+
 // getEventBackgroundColor returns a background color based on event properties
 func (m *Model) getEventBackgroundColor(event remind.Event) lipgloss.ANSIColor {
 	// P2 tasks get different colors than remind events

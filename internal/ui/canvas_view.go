@@ -441,13 +441,14 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 			}
 		}
 
-		// Get event color
-		color := m.getEventBackgroundColor(pos.Event)
+		// Get event colors
+		bgColor := m.getEventBackgroundColor(pos.Event)
+		textColor := m.getEventTextColor(bgColor)
 
 		// Create styled block with calculated width
 		block := lipgloss.NewStyle().
-			Background(color).
-			Foreground(lipgloss.ANSIColor(15)).
+			Background(bgColor).
+			Foreground(textColor).
 			Width(eventWidth).
 			Height(pos.SpanRows).
 			Render(text)
