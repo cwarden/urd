@@ -148,21 +148,19 @@ func (m *Model) createTimeColumnLayers(slotsPerDay, visibleSlots int) []*lipglos
 func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eventAreaWidth int) []*lipgloss.Layer {
 	var layers []*lipgloss.Layer
 
-	// Get visible date range
-	startSlot := m.topSlot
-	startDayOffset := startSlot / slotsPerDay
-	if startSlot < 0 {
-		startDayOffset = -1 + (startSlot+1)/slotsPerDay
-	}
-	startDate := m.selectedDate.AddDate(0, 0, startDayOffset)
-	baseDate := time.Date(startDate.Year(), startDate.Month(), startDate.Day(), 0, 0, 0, 0, startDate.Location())
+	// Use m.selectedDate as the base reference point for all calculations
+	// This ensures events stay on their correct days regardless of scrolling
+	baseDate := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), m.selectedDate.Day(), 0, 0, 0, 0, m.selectedDate.Location())
 
 	// Map events to visible slots and assign columns
 	type EventPosition struct {
-		Event    remind.Event
-		StartRow int // Row index in visible area (accounting for date separators)
-		SpanRows int // Number of rows to span
-		Column   int // Column assignment
+		Event        remind.Event
+		StartRow     int // Row index in visible area (accounting for date separators)
+		SpanRows     int // Number of rows to span
+		Column       int // Column assignment
+		ColumnSpan   int // Number of columns to span
+		ClippedStart int // For tracking slot occupancy
+		ClippedEnd   int // For tracking slot occupancy
 	}
 
 	var eventPositions []EventPosition
@@ -180,7 +178,14 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 			return true
 		}
 		if sortedEvents[i].Time == nil && sortedEvents[j].Time == nil {
-			return sortedEvents[i].Description < sortedEvents[j].Description
+			// Sort untimed events by priority, then description, then ID
+			if sortedEvents[i].Priority != sortedEvents[j].Priority {
+				return sortedEvents[i].Priority > sortedEvents[j].Priority
+			}
+			if sortedEvents[i].Description != sortedEvents[j].Description {
+				return sortedEvents[i].Description < sortedEvents[j].Description
+			}
+			return sortedEvents[i].ID < sortedEvents[j].ID
 		}
 
 		// Both have times - sort by date first
@@ -200,8 +205,13 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 			return sortedEvents[i].Priority > sortedEvents[j].Priority
 		}
 
-		// Finally, sort by description for stability
-		return sortedEvents[i].Description < sortedEvents[j].Description
+		// Sort by description
+		if sortedEvents[i].Description != sortedEvents[j].Description {
+			return sortedEvents[i].Description < sortedEvents[j].Description
+		}
+
+		// Finally, sort by ID for absolute stability
+		return sortedEvents[i].ID < sortedEvents[j].ID
 	})
 
 	// Calculate positions for each event
@@ -299,18 +309,95 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 		}
 
 		eventPositions = append(eventPositions, EventPosition{
-			Event:    event,
-			StartRow: startRow,
-			SpanRows: spanRows,
-			Column:   column,
+			Event:        event,
+			StartRow:     startRow,
+			SpanRows:     spanRows,
+			Column:       column,
+			ColumnSpan:   1, // Start with single column
+			ClippedStart: clippedStart,
+			ClippedEnd:   clippedEnd,
 		})
 	}
 
-	// Calculate column width
+	// Calculate initial column width to determine if expansion is needed
 	maxColumn := 0
 	for _, pos := range eventPositions {
 		if pos.Column > maxColumn {
 			maxColumn = pos.Column
+		}
+	}
+
+	initialNumColumns := maxColumn + 1
+	if initialNumColumns == 0 {
+		return layers // No events
+	}
+
+	padding := 2
+	initialColumnWidth := eventAreaWidth / initialNumColumns
+	if initialNumColumns > 1 {
+		initialColumnWidth = (eventAreaWidth - padding*(initialNumColumns-1)) / initialNumColumns
+	}
+
+	// After initial column assignment, try to expand events that need more space
+	for i := range eventPositions {
+		pos := &eventPositions[i]
+
+		// Calculate the text length for this event
+		textLen := len(pos.Event.Description)
+		if m.showEventIDs {
+			textLen += len(pos.Event.ID) + 3 // "[ID] "
+		}
+
+		// Only try to expand if the text doesn't fit comfortably in one column
+		if textLen <= initialColumnWidth-3 {
+			continue // Text fits fine in single column
+		}
+
+		// Try to expand rightward
+		for nextCol := pos.Column + 1; ; nextCol++ {
+			// Check if this column is free for all slots this event occupies
+			canExpand := true
+			for slot := pos.ClippedStart; slot < pos.ClippedEnd; slot++ {
+				if slotOccupancy[slot] != nil && slotOccupancy[slot][nextCol] {
+					canExpand = false
+					break
+				}
+			}
+
+			if !canExpand {
+				break
+			}
+
+			// Mark the new column as occupied
+			for slot := pos.ClippedStart; slot < pos.ClippedEnd; slot++ {
+				if slotOccupancy[slot] == nil {
+					slotOccupancy[slot] = make(map[int]bool)
+				}
+				slotOccupancy[slot][nextCol] = true
+			}
+
+			// Expand the column span
+			pos.ColumnSpan++
+
+			// Check if we now have enough space for the text
+			currentWidth := initialColumnWidth*pos.ColumnSpan + padding*(pos.ColumnSpan-1)
+			if textLen <= currentWidth-3 {
+				break // We have enough space now
+			}
+
+			// Don't expand too much - leave some space for readability
+			if pos.ColumnSpan >= 3 {
+				break
+			}
+		}
+	}
+
+	// Recalculate column width based on maximum columns actually used (after expansion)
+	maxColumn = 0
+	for _, pos := range eventPositions {
+		endColumn := pos.Column + pos.ColumnSpan - 1
+		if endColumn > maxColumn {
+			maxColumn = endColumn
 		}
 	}
 
@@ -319,7 +406,7 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 		return layers // No events
 	}
 
-	padding := 2
+	// Recalculate column width based on actual columns used
 	columnWidth := eventAreaWidth / numColumns
 	if numColumns > 1 {
 		columnWidth = (eventAreaWidth - padding*(numColumns-1)) / numColumns
@@ -333,6 +420,9 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 
 	// Create layer for each event
 	for i, pos := range eventPositions {
+		// Calculate the width for this event based on its column span
+		eventWidth := columnWidth*pos.ColumnSpan + padding*(pos.ColumnSpan-1)
+
 		// Create event text (only show text if event starts in visible area)
 		text := ""
 		if visibleStart := pos.Event.Time; visibleStart != nil {
@@ -344,8 +434,9 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 				if m.showEventIDs {
 					text = fmt.Sprintf("[%s] %s", pos.Event.ID, text)
 				}
-				if len(text) > columnWidth {
-					text = text[:columnWidth-3] + "..."
+				// Use the calculated event width for truncation
+				if len(text) > eventWidth {
+					text = text[:eventWidth-3] + "..."
 				}
 			}
 		}
@@ -353,11 +444,11 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 		// Get event color
 		color := m.getEventBackgroundColor(pos.Event)
 
-		// Create styled block
+		// Create styled block with calculated width
 		block := lipgloss.NewStyle().
 			Background(color).
 			Foreground(lipgloss.ANSIColor(15)).
-			Width(columnWidth).
+			Width(eventWidth).
 			Height(pos.SpanRows).
 			Render(text)
 
@@ -475,7 +566,11 @@ func (m *Model) createSidebarLayer(xOffset, width int) *lipgloss.Layer {
 			return untimedEvents[i].Priority > untimedEvents[j].Priority
 		}
 		// Then by description alphabetically
-		return untimedEvents[i].Description < untimedEvents[j].Description
+		if untimedEvents[i].Description != untimedEvents[j].Description {
+			return untimedEvents[i].Description < untimedEvents[j].Description
+		}
+		// Finally by ID for absolute stability
+		return untimedEvents[i].ID < untimedEvents[j].ID
 	})
 
 	// Display sorted untimed events

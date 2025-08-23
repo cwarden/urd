@@ -1900,7 +1900,11 @@ func (m *Model) getSortedUntimedEvents(date time.Time) []remind.Event {
 			return untimedEvents[i].Priority > untimedEvents[j].Priority
 		}
 		// Then by description alphabetically
-		return untimedEvents[i].Description < untimedEvents[j].Description
+		if untimedEvents[i].Description != untimedEvents[j].Description {
+			return untimedEvents[i].Description < untimedEvents[j].Description
+		}
+		// Finally by ID for absolute stability
+		return untimedEvents[i].ID < untimedEvents[j].ID
 	})
 
 	return untimedEvents
