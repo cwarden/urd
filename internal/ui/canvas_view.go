@@ -353,8 +353,8 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 			continue // Text fits fine in single column
 		}
 
-		// Try to expand rightward
-		for nextCol := pos.Column + 1; ; nextCol++ {
+		// Try to expand rightward, but only into already-used columns
+		for nextCol := pos.Column + 1; nextCol < initialNumColumns; nextCol++ {
 			// Check if this column is free for all slots this event occupies
 			canExpand := true
 			for slot := pos.ClippedStart; slot < pos.ClippedEnd; slot++ {
@@ -414,9 +414,6 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 	if columnWidth < 10 {
 		columnWidth = 10
 	}
-	if columnWidth > 60 {
-		columnWidth = 60
-	}
 
 	// Create layer for each event
 	for i, pos := range eventPositions {
@@ -434,7 +431,7 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 				if m.showEventIDs {
 					text = fmt.Sprintf("[%s] %s", pos.Event.ID, text)
 				}
-				// Use the calculated event width for truncation
+				// Only truncate if text is longer than available width
 				if len(text) > eventWidth {
 					text = text[:eventWidth-3] + "..."
 				}
