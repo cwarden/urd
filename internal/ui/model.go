@@ -393,6 +393,8 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !m.isSlotVisible(m.selectedSlot) {
 			m.topSlot++
 		}
+		// Update selectedDate to match the day of the selected slot
+		m.updateSelectedDateFromSlot()
 
 	case "scroll_up":
 		// If focused on untimed reminders, this is handled later
@@ -405,6 +407,8 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if !m.isSlotVisible(m.selectedSlot) {
 			m.topSlot--
 		}
+		// Update selectedDate to match the day of the selected slot
+		m.updateSelectedDateFromSlot()
 
 	case "next_day":
 		// Next day - jump forward by one day
@@ -1821,6 +1825,44 @@ func (m *Model) needsEventReload() bool {
 	}
 
 	return false
+}
+
+// updateSelectedDateFromSlot updates the selectedDate when the selected slot crosses day boundaries
+// This keeps the calendar in sync with the hourly view
+func (m *Model) updateSelectedDateFromSlot() {
+	// In this codebase, selectedDate acts as a reference date where slot 0 = midnight of selectedDate
+	// When we scroll through slots, we need to check if we've moved to a different day
+	// and update selectedDate accordingly to keep the calendar synchronized
+
+	// Calculate slots per day based on time increment
+	slotsPerDay := 24
+	if m.timeIncrement == 30 {
+		slotsPerDay = 48
+	} else if m.timeIncrement == 15 {
+		slotsPerDay = 96
+	}
+
+	// Calculate which day the selected slot falls on
+	dayOffset := m.selectedSlot / slotsPerDay
+	if m.selectedSlot < 0 {
+		// Handle negative slots correctly
+		dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+	}
+
+	// If we've moved to a different day, update selectedDate and reset slot numbering
+	if dayOffset != 0 {
+		// Update the reference date to the new day
+		m.selectedDate = m.selectedDate.AddDate(0, 0, dayOffset)
+
+		// Adjust slot numbers to be relative to the new reference date
+		m.selectedSlot = m.selectedSlot - (dayOffset * slotsPerDay)
+		m.topSlot = m.topSlot - (dayOffset * slotsPerDay)
+
+		// Check if we need to reload events for the new date range
+		if m.needsEventReload() {
+			m.loadEventsForSchedule()
+		}
+	}
 }
 
 func (m *Model) getEventAtSlot(slot int) *remind.Event {
