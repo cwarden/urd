@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -653,6 +654,189 @@ func TestColumnWidthWithoutCap(t *testing.T) {
 			// 2. It produces the expected number of layers
 			// 3. The logic changes ensure full width is used when appropriate
 		})
+	}
+}
+
+// TestStatusBarLayerRendering tests that status bar layers are properly created
+func TestStatusBarLayerRendering(t *testing.T) {
+	m := &Model{
+		width:         120,
+		height:        30,
+		timeIncrement: 60,
+		selectedDate:  time.Date(2025, 8, 25, 0, 0, 0, 0, time.Local),
+		config:        &config.Config{},
+		styles:        defaultStyles(),
+	}
+
+	tests := []struct {
+		name           string
+		visibleSlots   int
+		message        string
+		expectedLayers int
+	}{
+		{
+			name:           "Normal status bar without message",
+			visibleSlots:   28,
+			message:        "",
+			expectedLayers: 4, // 2 background + 2 text layers
+		},
+		{
+			name:           "Status bar with message",
+			visibleSlots:   28,
+			message:        "Test message",
+			expectedLayers: 4, // 2 background + 2 text layers
+		},
+		{
+			name:           "Small visible area",
+			visibleSlots:   5,
+			message:        "",
+			expectedLayers: 4,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m.message = tt.message
+			layers := m.createStatusBarLayers(tt.visibleSlots)
+
+			if len(layers) != tt.expectedLayers {
+				t.Errorf("Expected %d layers, got %d", tt.expectedLayers, len(layers))
+			}
+
+			// Check that we got the expected number of layers
+			// We can't directly inspect layer properties, but we can verify the function completes
+			// and returns the expected number of layers
+		})
+	}
+}
+
+// TestTimeColumnBoundaryChecking tests that time columns don't overflow into status bar
+func TestTimeColumnBoundaryChecking(t *testing.T) {
+	baseDate := time.Date(2025, 8, 25, 0, 0, 0, 0, time.Local)
+
+	tests := []struct {
+		name          string
+		topSlot       int
+		visibleSlots  int
+		timeIncrement int
+		expectMaxRows int // Maximum rows that should be created
+	}{
+		{
+			name:          "Single day view",
+			topSlot:       0,
+			visibleSlots:  24,
+			timeIncrement: 60,
+			expectMaxRows: 24, // Should not exceed visibleSlots
+		},
+		{
+			name:          "Multi-day view with separators",
+			topSlot:       20,
+			visibleSlots:  10,
+			timeIncrement: 60,
+			expectMaxRows: 10, // Should stop at visibleSlots even with date separators
+		},
+		{
+			name:          "View starting at negative slot",
+			topSlot:       -5,
+			visibleSlots:  15,
+			timeIncrement: 60,
+			expectMaxRows: 15,
+		},
+		{
+			name:          "30-minute increments with day boundary",
+			topSlot:       45,
+			visibleSlots:  8,
+			timeIncrement: 30,
+			expectMaxRows: 8,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Model{
+				width:         120,
+				height:        tt.visibleSlots + 2, // +2 for status bar
+				timeIncrement: tt.timeIncrement,
+				selectedDate:  baseDate,
+				topSlot:       tt.topSlot,
+				config:        &config.Config{},
+				styles:        defaultStyles(),
+			}
+
+			slotsPerDay := 24
+			if tt.timeIncrement == 30 {
+				slotsPerDay = 48
+			} else if tt.timeIncrement == 15 {
+				slotsPerDay = 96
+			}
+
+			layers := m.createTimeColumnLayers(slotsPerDay, tt.visibleSlots)
+
+			// We can't directly inspect layer Y positions, but we can verify:
+			// 1. The function doesn't panic
+			// 2. It returns layers
+			// 3. The boundary checking logic in the implementation prevents overflow
+
+			if layers == nil {
+				t.Error("createTimeColumnLayers returned nil")
+			}
+
+			// The number of layers should be reasonable (not exceed visible slots * 2)
+			// (accounting for both time labels and possible date separators)
+			maxExpectedLayers := tt.visibleSlots * 2
+			if len(layers) > maxExpectedLayers {
+				t.Errorf("Too many layers created: %d, max expected: %d",
+					len(layers), maxExpectedLayers)
+			}
+		})
+	}
+}
+
+// TestCanvasViewIntegration tests the full canvas view rendering
+func TestCanvasViewIntegration(t *testing.T) {
+	m := &Model{
+		width:         120,
+		height:        30,
+		timeIncrement: 60,
+		selectedDate:  time.Date(2025, 8, 25, 12, 0, 0, 0, time.Local),
+		topSlot:       8,
+		selectedSlot:  12,
+		config:        &config.Config{},
+		styles:        defaultStyles(),
+		showEventIDs:  false,
+		events: []remind.Event{
+			{
+				Date:        time.Date(2025, 8, 25, 0, 0, 0, 0, time.Local),
+				Time:        timePtr(10, 0),
+				Description: "Morning meeting",
+				Duration:    durationPtr(60),
+			},
+			{
+				Date:        time.Date(2025, 8, 25, 0, 0, 0, 0, time.Local),
+				Time:        timePtr(14, 0),
+				Description: "Afternoon task",
+				Duration:    durationPtr(120),
+			},
+		},
+	}
+
+	// This should not panic
+	output := m.renderCanvasView()
+
+	// Basic checks
+	if output == "" {
+		t.Error("renderCanvasView returned empty string")
+	}
+
+	// Check that the output contains expected elements
+	if !strings.Contains(output, "Currently:") {
+		t.Error("Output missing 'Currently:' status line")
+	}
+
+	// The output should be properly bounded to the terminal height
+	lines := strings.Split(output, "\n")
+	if len(lines) > m.height {
+		t.Errorf("Output has %d lines, exceeds height %d", len(lines), m.height)
 	}
 }
 

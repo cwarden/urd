@@ -81,12 +81,21 @@ func (m *Model) createTimeColumnLayers(slotsPerDay, visibleSlots int) []*lipglos
 
 		// Add date separator when day changes
 		if dayOffset != prevDay {
+			// Check if we have room for the date separator
+			if rowIndex >= visibleSlots {
+				break // No more room for content
+			}
 			currentDate := m.selectedDate.AddDate(0, 0, dayOffset)
 			dateLine := currentDate.Format("─Mon Jan 02")
 			dateLayer := lipgloss.NewLayer(m.styles.Header.Render(dateLine)).X(0).Y(rowIndex).Z(0)
 			layers = append(layers, dateLayer)
 			prevDay = dayOffset
 			rowIndex++
+		}
+
+		// Check if we have room for the time slot
+		if rowIndex >= visibleSlots {
+			break // No more room for content
 		}
 
 		// Calculate time for this slot
@@ -609,6 +618,21 @@ func (m *Model) createSidebarLayer(xOffset, width int) *lipgloss.Layer {
 func (m *Model) createStatusBarLayers(visibleSlots int) []*lipgloss.Layer {
 	var layers []*lipgloss.Layer
 	now := time.Now()
+
+	// Add a background layer for the status bar to ensure nothing bleeds through
+	backgroundLine1 := strings.Repeat(" ", m.width)
+	bgLayer1 := lipgloss.NewLayer(m.styles.Normal.Render(backgroundLine1)).
+		X(0).
+		Y(visibleSlots).
+		Z(1999) // Just below the text layers
+	layers = append(layers, bgLayer1)
+
+	backgroundLine2 := strings.Repeat(" ", m.width)
+	bgLayer2 := lipgloss.NewLayer(m.styles.Normal.Render(backgroundLine2)).
+		X(0).
+		Y(visibleSlots + 1).
+		Z(1999)
+	layers = append(layers, bgLayer2)
 
 	// First line: Current time
 	dateStr := now.Format("Monday, January 2 at 15:04")
