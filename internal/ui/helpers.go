@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -216,6 +217,26 @@ func (m *Model) renderSelectedSlotEvents() string {
 			}
 		}
 	}
+
+	// Sort events for consistent display
+	sort.Slice(selectedEvents, func(i, j int) bool {
+		// Sort by start time first
+		if selectedEvents[i].Time != nil && selectedEvents[j].Time != nil {
+			if !selectedEvents[i].Time.Equal(*selectedEvents[j].Time) {
+				return selectedEvents[i].Time.Before(*selectedEvents[j].Time)
+			}
+		}
+		// Then by priority (higher priority first)
+		if selectedEvents[i].Priority != selectedEvents[j].Priority {
+			return selectedEvents[i].Priority > selectedEvents[j].Priority
+		}
+		// Then by description alphabetically
+		if selectedEvents[i].Description != selectedEvents[j].Description {
+			return selectedEvents[i].Description < selectedEvents[j].Description
+		}
+		// Finally by ID for absolute stability
+		return selectedEvents[i].ID < selectedEvents[j].ID
+	})
 
 	var lines []string
 
