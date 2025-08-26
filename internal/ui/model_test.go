@@ -320,6 +320,149 @@ func repeatAction(action string, count int) []string {
 	return result
 }
 
+// TestInactivityAutoAdvance tests the auto-advance behavior after inactivity
+func TestInactivityAutoAdvance(t *testing.T) {
+	// We'll test by setting lastKeyInput to more than 5 minutes ago
+	// and checking if the slot advances when conditions are met
+
+	tests := []struct {
+		name                   string
+		timeIncrement          int
+		selectedSlot           int              // Current slot user is at
+		setupLastInput         func() time.Time // How to set lastKeyInput relative to now
+		shouldAdvance          bool
+		expectedSlotAdjustment int // How much the slot should change
+	}{
+		{
+			name:          "Advances when at previous slot after inactivity",
+			timeIncrement: 60,
+			selectedSlot: func() int {
+				now := time.Now()
+				return now.Hour() - 1 // Previous hour slot
+			}(),
+			setupLastInput: func() time.Time {
+				return time.Now().Add(-6 * time.Minute) // 6 minutes ago
+			},
+			shouldAdvance:          true,
+			expectedSlotAdjustment: 1, // Should advance by 1 slot
+		},
+		{
+			name:          "Does not advance when not at previous slot",
+			timeIncrement: 60,
+			selectedSlot:  10, // Some arbitrary slot, not the previous one
+			setupLastInput: func() time.Time {
+				return time.Now().Add(-6 * time.Minute) // 6 minutes ago
+			},
+			shouldAdvance:          false,
+			expectedSlotAdjustment: 0, // Should stay the same
+		},
+		{
+			name:          "Does not advance when recently active",
+			timeIncrement: 60,
+			selectedSlot: func() int {
+				now := time.Now()
+				return now.Hour() - 1 // Previous hour slot
+			}(),
+			setupLastInput: func() time.Time {
+				return time.Now().Add(-2 * time.Minute) // Only 2 minutes ago
+			},
+			shouldAdvance:          false,
+			expectedSlotAdjustment: 0, // Should stay the same
+		},
+		{
+			name:          "Advances with 30-min increments",
+			timeIncrement: 30,
+			selectedSlot: func() int {
+				now := time.Now()
+				currentSlot := now.Hour()*2 + now.Minute()/30
+				return currentSlot - 1 // Previous slot
+			}(),
+			setupLastInput: func() time.Time {
+				return time.Now().Add(-6 * time.Minute) // 6 minutes ago
+			},
+			shouldAdvance:          true,
+			expectedSlotAdjustment: 1, // Should advance by 1 slot
+		},
+		{
+			name:          "Does not advance when user navigated away",
+			timeIncrement: 60,
+			selectedSlot:  20, // Some future slot (user navigated forward)
+			setupLastInput: func() time.Time {
+				return time.Now().Add(-6 * time.Minute) // 6 minutes ago
+			},
+			shouldAdvance:          false,
+			expectedSlotAdjustment: 0, // Should stay the same
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			now := time.Now()
+			m := &Model{
+				timeIncrement: tt.timeIncrement,
+				selectedSlot:  tt.selectedSlot,
+				selectedDate:  now,
+				lastKeyInput:  tt.setupLastInput(),
+				height:        30,
+				config:        &config.Config{},
+				remindClient:  &remind.Client{},
+			}
+
+			initialSlot := m.selectedSlot
+
+			// Simulate timeUpdateMsg handling
+			msg := timeUpdateMsg{}
+			model, _ := m.Update(msg)
+			updatedModel := model.(*Model)
+
+			actualAdjustment := updatedModel.selectedSlot - initialSlot
+
+			if tt.shouldAdvance {
+				if actualAdjustment != tt.expectedSlotAdjustment {
+					t.Errorf("Expected slot to advance by %d, but it changed by %d (from %d to %d)",
+						tt.expectedSlotAdjustment, actualAdjustment, initialSlot, updatedModel.selectedSlot)
+				}
+			} else {
+				if actualAdjustment != 0 {
+					t.Errorf("Expected slot to stay at %d, but got %d", initialSlot, updatedModel.selectedSlot)
+				}
+			}
+		})
+	}
+}
+
+// TestLastKeyInputField tests that the lastKeyInput field exists and can be manipulated
+func TestLastKeyInputField(t *testing.T) {
+	initialTime := time.Date(2025, 8, 25, 14, 0, 0, 0, time.Local)
+
+	m := &Model{
+		timeIncrement: 60,
+		selectedSlot:  14,
+		selectedDate:  initialTime,
+		lastKeyInput:  initialTime.Add(-10 * time.Minute), // 10 minutes ago
+		height:        30,
+		config:        &config.Config{},
+		remindClient:  &remind.Client{},
+		mode:          ViewHourly,
+	}
+
+	// Verify the lastKeyInput field exists and was set correctly
+	expectedDiff := 10 * time.Minute
+	actualDiff := initialTime.Sub(m.lastKeyInput)
+
+	if actualDiff != expectedDiff {
+		t.Errorf("Expected lastKeyInput to be %v before initialTime, but got %v", expectedDiff, actualDiff)
+	}
+
+	// Test that we can update it
+	newTime := initialTime.Add(-5 * time.Minute)
+	m.lastKeyInput = newTime
+
+	if m.lastKeyInput != newTime {
+		t.Errorf("Failed to update lastKeyInput field")
+	}
+}
+
 // TestIsSlotVisible tests the slot visibility check
 func TestIsSlotVisible(t *testing.T) {
 	tests := []struct {

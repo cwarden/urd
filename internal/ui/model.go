@@ -75,6 +75,9 @@ type Model struct {
 	currentSearchHit int            // index in searchResults
 	lastSearchDate   time.Time      // when we last searched (for cache invalidation)
 
+	// Activity tracking
+	lastKeyInput time.Time // last time a key was pressed
+
 	// Styles
 	styles Styles
 }
@@ -103,9 +106,10 @@ func NewModelWithRemind(cfg *config.Config, source remind.ReminderSource, remind
 		mode:          ViewHourly,
 		selectedDate:  now,
 		events:        []remind.Event{},
-		selectedSlot:  now.Hour()*2 + now.Minute()/30, // Default 30-min slots
+		selectedSlot:  now.Hour()*2 + now.Minute()/30, // Default 30-min slots (can't use timeToSlot yet as timeIncrement not set)
 		timeIncrement: 30,                             // Default to 30-minute slots
 		topSlot:       0,
+		lastKeyInput:  now, // Initialize to current time
 		styles:        DefaultStyles(),
 	}
 
@@ -176,6 +180,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyPressMsg:
+		m.lastKeyInput = time.Now()
 		return m.handleKeyPress(msg)
 
 	case tickMsg:
@@ -187,7 +192,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case timeUpdateMsg:
-		// Update current time display every minute
+		// Update current time display every minute and handle auto-advance
+		m.handleInactivityAutoAdvance()
 		return m, m.timeUpdateCmd()
 
 	case eventLoadedMsg:
@@ -288,12 +294,7 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		case "refresh":
 			m.loadEvents()
 			now := time.Now()
-			currentTimeSlot := now.Hour()
-			if m.timeIncrement == 30 {
-				currentTimeSlot = now.Hour()*2 + now.Minute()/30
-			} else if m.timeIncrement == 15 {
-				currentTimeSlot = now.Hour()*4 + now.Minute()/15
-			}
+			currentTimeSlot := m.getCurrentTimeSlot()
 			m.showMessage(fmt.Sprintf("Refreshed - Now: %02d:%02d, slot=%d, selected=%d", now.Hour(), now.Minute(), currentTimeSlot, m.selectedSlot))
 			return m, nil
 		}
@@ -344,14 +345,52 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleInactivityAutoAdvance advances the selected slot to the current time
+// if the user has been inactive for more than 5 minutes and is currently at
+// the slot immediately before the current time slot.
+func (m *Model) handleInactivityAutoAdvance() {
+	// Only auto-advance after 5 minutes of inactivity
+	if time.Since(m.lastKeyInput) <= 5*time.Minute {
+		return
+	}
+
+	now := time.Now()
+
+	// Calculate the current slot based on current time increment
+	slotsPerDay := m.getSlotsPerDay()
+	currentTimeSlot := m.timeToSlot(now.Hour(), now.Minute())
+
+	// Calculate the day offset from the base date (selectedDate at 00:00)
+	baseDate := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), m.selectedDate.Day(), 0, 0, 0, 0, m.selectedDate.Location())
+	todayDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	dayOffset := int(todayDate.Sub(baseDate).Hours() / 24)
+
+	// Calculate what the current time slot is relative to our base date
+	targetSlot := dayOffset*slotsPerDay + currentTimeSlot
+
+	// Only auto-advance if user is at the previous time slot (the slot immediately before current time)
+	// This means they were at "now" when they stopped interacting, and time has moved forward by one slot
+	if m.selectedSlot != targetSlot-1 {
+		return
+	}
+
+	// Advance to current time slot
+	m.selectedSlot = targetSlot
+
+	// Update selected date to today if we've moved to a different day
+	if dayOffset != 0 {
+		m.selectedDate = now
+		// Reset slot to be relative to today
+		m.selectedSlot = currentTimeSlot
+	}
+
+	// Ensure the selected slot is visible
+	m.centerSelectedSlot()
+}
+
 func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Calculate slots per day based on increment
-	slotsPerDay := 24
-	if m.timeIncrement == 30 {
-		slotsPerDay = 48
-	} else if m.timeIncrement == 15 {
-		slotsPerDay = 96
-	}
+	slotsPerDay := m.getSlotsPerDay()
 
 	visibleSlots := m.getVisibleSlots()
 
@@ -456,12 +495,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.selectedDate = now
 
 		// Calculate current time slot for today (where day 0 = today)
-		currentTimeSlot := now.Hour()
-		if m.timeIncrement == 30 {
-			currentTimeSlot = now.Hour()*2 + now.Minute()/30
-		} else if m.timeIncrement == 15 {
-			currentTimeSlot = now.Hour()*4 + now.Minute()/15
-		}
+		currentTimeSlot := m.getCurrentTimeSlot()
 
 		// Set slots as if today is day 0 (selectedSlot = 0 means 00:00 today)
 		m.selectedSlot = currentTimeSlot
@@ -489,15 +523,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 
-		hour := localSlot
-		minute := 0
-		if m.timeIncrement == 30 {
-			hour = localSlot / 2
-			minute = (localSlot % 2) * 30
-		} else if m.timeIncrement == 15 {
-			hour = localSlot / 4
-			minute = (localSlot % 4) * 15
-		}
+		hour, minute := m.slotToTime(localSlot)
 
 		// Change increment
 		oldIncrement := m.timeIncrement
@@ -511,17 +537,8 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		// Recalculate slot position with new increment
-		newSlotsPerDay := 24
-		if m.timeIncrement == 30 {
-			newSlotsPerDay = 48
-			localSlot = hour*2 + minute/30
-		} else if m.timeIncrement == 15 {
-			newSlotsPerDay = 96
-			localSlot = hour*4 + minute/15
-		} else {
-			newSlotsPerDay = 24
-			localSlot = hour
-		}
+		newSlotsPerDay := m.getSlotsPerDay()
+		localSlot = m.timeToSlot(hour, minute)
 
 		m.selectedSlot = dayOffset*newSlotsPerDay + localSlot
 
@@ -529,19 +546,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.topSlot = m.topSlot * newSlotsPerDay / (24 * oldIncrement / 60)
 
 		// Ensure selected slot is visible after zoom
-		visibleSlots := m.getVisibleSlots()
-
-		// If selected slot is above visible area, scroll up
-		if m.selectedSlot < m.topSlot {
-			m.topSlot = m.selectedSlot
-		}
-		// If selected slot is below visible area, scroll down
-		if m.selectedSlot >= m.topSlot+visibleSlots {
-			m.topSlot = m.selectedSlot - visibleSlots/2 // Center it
-			if m.topSlot < 0 {
-				m.topSlot = 0
-			}
-		}
+		m.ensureSelectedSlotVisible()
 
 	case "goto":
 		// Go to specific date
@@ -649,15 +654,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
-		hour := localSlot
-		minute := 0
-		if m.timeIncrement == 30 {
-			hour = localSlot / 2
-			minute = (localSlot % 2) * 30
-		} else if m.timeIncrement == 15 {
-			hour = localSlot / 4
-			minute = (localSlot % 4) * 15
-		}
+		hour, minute := m.slotToTime(localSlot)
 
 		// Format date and time for remind format (e.g., "Aug 19 2025")
 		dateStr := fmt.Sprintf("%s %02d %d", monthName(selectedDate.Month()), selectedDate.Day(), selectedDate.Year())
@@ -738,15 +735,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
-		hour := localSlot
-		minute := 0
-		if m.timeIncrement == 30 {
-			hour = localSlot / 2
-			minute = (localSlot % 2) * 30
-		} else if m.timeIncrement == 15 {
-			hour = localSlot / 4
-			minute = (localSlot % 4) * 15
-		}
+		hour, minute := m.slotToTime(localSlot)
 
 		dateStr := fmt.Sprintf("%s %02d %d", monthName(selectedDate.Month()), selectedDate.Day(), selectedDate.Year())
 		timeStr := fmt.Sprintf("%02d:%02d", hour, minute)
@@ -1222,12 +1211,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Handle navigation within untimed reminders when focused
 	if m.focusUntimed {
 		// Count untimed events for selected day
-		slotsPerDay := 24
-		if m.timeIncrement == 30 {
-			slotsPerDay = 48
-		} else if m.timeIncrement == 15 {
-			slotsPerDay = 96
-		}
+		slotsPerDay := m.getSlotsPerDay()
 
 		dayOffset := m.selectedSlot / slotsPerDay
 		if m.selectedSlot < 0 {
@@ -1498,19 +1482,10 @@ func (m *Model) handleGotoDateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.selectedDate = parsedDate
 
 				// Reset the time slot to noon of the selected day
-				m.selectedSlot = 12 // Noon slot for 60-minute increments
-				if m.timeIncrement == 30 {
-					m.selectedSlot = 24 // Noon slot for 30-minute increments
-				} else if m.timeIncrement == 15 {
-					m.selectedSlot = 48 // Noon slot for 15-minute increments
-				}
+				m.selectedSlot = m.getNoonSlot()
 
 				// Adjust top slot to center the selected slot
-				visibleSlots := m.getVisibleSlots()
-				m.topSlot = m.selectedSlot - visibleSlots/2
-				if m.topSlot < 0 {
-					m.topSlot = 0
-				}
+				m.centerSelectedSlot()
 
 				// Load events for the new date
 				m.loadEventsForSchedule()
@@ -1617,12 +1592,7 @@ func (m *Model) findNextSearchResult() bool {
 	currentSlot := m.selectedSlot
 
 	// Calculate current time for timed events
-	slotsPerDay := 24
-	if m.timeIncrement == 30 {
-		slotsPerDay = 48
-	} else if m.timeIncrement == 15 {
-		slotsPerDay = 96
-	}
+	slotsPerDay := m.getSlotsPerDay()
 
 	// Search forward through events starting from current position
 	// First, check if we need to expand our event range
@@ -1682,12 +1652,7 @@ func (m *Model) findNextSearchResult() bool {
 			if event.Time != nil {
 				hour := event.Time.Hour()
 				minute := event.Time.Minute()
-				localSlot := hour
-				if m.timeIncrement == 30 {
-					localSlot = hour*2 + minute/30
-				} else if m.timeIncrement == 15 {
-					localSlot = hour*4 + minute/15
-				}
+				localSlot := m.timeToSlot(hour, minute)
 
 				// Calculate day offset
 				baseDate := time.Date(currentDate.Year(), currentDate.Month(), currentDate.Day(), 0, 0, 0, 0, currentDate.Location())
@@ -1754,11 +1719,7 @@ func (m *Model) findNextSearchResult() bool {
 			m.selectedSlot = dayDiff*slotsPerDay + localSlot
 
 			// Adjust view to show the selected slot
-			visibleSlots := m.getVisibleSlots()
-			m.topSlot = m.selectedSlot - visibleSlots/2
-			if m.topSlot < 0 {
-				m.topSlot = 0
-			}
+			m.centerSelectedSlot()
 
 			m.focusUntimed = false
 		} else {
@@ -1835,12 +1796,7 @@ func (m *Model) updateSelectedDateFromSlot() {
 	// and update selectedDate accordingly to keep the calendar synchronized
 
 	// Calculate slots per day based on time increment
-	slotsPerDay := 24
-	if m.timeIncrement == 30 {
-		slotsPerDay = 48
-	} else if m.timeIncrement == 15 {
-		slotsPerDay = 96
-	}
+	slotsPerDay := m.getSlotsPerDay()
 
 	// Calculate which day the selected slot falls on
 	dayOffset := m.selectedSlot / slotsPerDay
@@ -1867,12 +1823,7 @@ func (m *Model) updateSelectedDateFromSlot() {
 
 func (m *Model) getEventAtSlot(slot int) *remind.Event {
 	// Calculate slots per day based on increment
-	slotsPerDay := 24
-	if m.timeIncrement == 30 {
-		slotsPerDay = 48
-	} else if m.timeIncrement == 15 {
-		slotsPerDay = 96
-	}
+	slotsPerDay := m.getSlotsPerDay()
 
 	// Calculate day offset and local slot
 	dayOffset := slot / slotsPerDay
@@ -1904,12 +1855,7 @@ func (m *Model) getEventAtSlot(slot int) *remind.Event {
 			eventMinute := event.Time.Minute()
 
 			// Calculate which slot this event should be in
-			eventSlot := eventHour
-			if m.timeIncrement == 30 {
-				eventSlot = eventHour*2 + eventMinute/30
-			} else if m.timeIncrement == 15 {
-				eventSlot = eventHour*4 + eventMinute/15
-			}
+			eventSlot := m.timeToSlot(eventHour, eventMinute)
 
 			if eventSlot == localSlot {
 				return &event
@@ -1957,12 +1903,7 @@ func (m *Model) getEventsAtSlot(slot int) []remind.Event {
 	var events []remind.Event
 
 	// Calculate slots per day based on increment
-	slotsPerDay := 24
-	if m.timeIncrement == 30 {
-		slotsPerDay = 48
-	} else if m.timeIncrement == 15 {
-		slotsPerDay = 96
-	}
+	slotsPerDay := m.getSlotsPerDay()
 
 	// Calculate day offset and local slot
 	dayOffset := slot / slotsPerDay
@@ -1994,12 +1935,7 @@ func (m *Model) getEventsAtSlot(slot int) []remind.Event {
 			eventMinute := event.Time.Minute()
 
 			// Calculate which slot this event starts in
-			eventStartSlot := eventHour
-			if m.timeIncrement == 30 {
-				eventStartSlot = eventHour*2 + eventMinute/30
-			} else if m.timeIncrement == 15 {
-				eventStartSlot = eventHour*4 + eventMinute/15
-			}
+			eventStartSlot := m.timeToSlot(eventHour, eventMinute)
 
 			// Calculate how many slots this event spans
 			eventSlots := 1
@@ -2084,15 +2020,99 @@ func (m *Model) getVisibleSlots() int {
 	return visibleSlots
 }
 
+// centerSelectedSlot adjusts topSlot to center the selected slot in the view
+func (m *Model) centerSelectedSlot() {
+	visibleSlots := m.getVisibleSlots()
+	m.topSlot = m.selectedSlot - visibleSlots/2
+
+	// Ensure topSlot doesn't go negative
+	if m.topSlot < 0 {
+		m.topSlot = 0
+	}
+}
+
+// ensureSelectedSlotVisible adjusts topSlot to make the selected slot visible,
+// only scrolling if necessary (minimal scroll)
+func (m *Model) ensureSelectedSlotVisible() {
+	visibleSlots := m.getVisibleSlots()
+
+	if m.selectedSlot < m.topSlot {
+		// Slot is above visible area, scroll up
+		m.topSlot = m.selectedSlot
+	} else if m.selectedSlot >= m.topSlot+visibleSlots {
+		// Slot is below visible area, scroll down to center it
+		m.topSlot = m.selectedSlot - visibleSlots/2
+
+		// Ensure topSlot doesn't go negative
+		if m.topSlot < 0 {
+			m.topSlot = 0
+		}
+	}
+	// If slot is already visible, no need to adjust
+}
+
+// getSlotsPerDay returns the number of slots per day based on the time increment
+func (m *Model) getSlotsPerDay() int {
+	switch m.timeIncrement {
+	case 15:
+		return 96 // 24 hours * 4 slots per hour
+	case 30:
+		return 48 // 24 hours * 2 slots per hour
+	case 60:
+		return 24 // 24 hours * 1 slot per hour
+	default:
+		return 24 // Default to 60-minute slots
+	}
+}
+
+// getCurrentTimeSlot returns the slot index for the current time
+func (m *Model) getCurrentTimeSlot() int {
+	now := time.Now()
+	return m.timeToSlot(now.Hour(), now.Minute())
+}
+
+// timeToSlot converts hour and minute to a slot index
+func (m *Model) timeToSlot(hour, minute int) int {
+	switch m.timeIncrement {
+	case 15:
+		return hour*4 + minute/15
+	case 30:
+		return hour*2 + minute/30
+	case 60:
+		return hour
+	default:
+		return hour // Default to 60-minute slots
+	}
+}
+
+// slotToTime converts a slot index to hour and minute
+func (m *Model) slotToTime(slot int) (hour, minute int) {
+	switch m.timeIncrement {
+	case 15:
+		hour = slot / 4
+		minute = (slot % 4) * 15
+	case 30:
+		hour = slot / 2
+		minute = (slot % 2) * 30
+	case 60:
+		hour = slot
+		minute = 0
+	default:
+		hour = slot // Default to 60-minute slots
+		minute = 0
+	}
+	return hour, minute
+}
+
+// getNoonSlot returns the slot index for noon (12:00)
+func (m *Model) getNoonSlot() int {
+	return m.timeToSlot(12, 0)
+}
+
 // isSlotVisible checks if a given slot is actually visible on screen
 func (m *Model) isSlotVisible(slot int) bool {
 	// Calculate slots per day based on time increment
-	slotsPerDay := 24
-	if m.timeIncrement == 30 {
-		slotsPerDay = 48
-	} else if m.timeIncrement == 15 {
-		slotsPerDay = 96
-	}
+	slotsPerDay := m.getSlotsPerDay()
 
 	// Calculate visible slots
 	visibleSlots := m.getVisibleSlots()
