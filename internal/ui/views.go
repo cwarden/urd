@@ -281,6 +281,51 @@ func (m *Model) viewEventSelector() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
+func (m *Model) viewClipboardSelector() string {
+	var sections []string
+
+	operation := "Copy"
+	if m.clipboardOperation == "cut" {
+		operation = "Cut"
+	}
+	header := m.styles.Header.Render(fmt.Sprintf("Select Event to %s", operation))
+	sections = append(sections, header)
+	sections = append(sections, "")
+
+	if len(m.eventChoices) == 0 {
+		sections = append(sections, m.styles.Help.Render("No events to select"))
+	} else {
+		for i, event := range m.eventChoices {
+			prefix := fmt.Sprintf("%d. ", i+1)
+
+			// Format the event description
+			var eventStr string
+			if event.Time != nil {
+				eventStr = fmt.Sprintf("%s %s - %s",
+					event.Time.Format("15:04"),
+					event.Description,
+					event.Date.Format("Jan 2"))
+			} else {
+				eventStr = fmt.Sprintf("%s - %s",
+					event.Description,
+					event.Date.Format("Jan 2"))
+			}
+
+			// Highlight the selected item
+			if i == m.selectedEventIndex {
+				sections = append(sections, m.styles.Selected.Render(prefix+eventStr))
+			} else {
+				sections = append(sections, m.styles.Normal.Render(prefix+eventStr))
+			}
+		}
+	}
+
+	sections = append(sections, "")
+	sections = append(sections, m.styles.Help.Render("Enter/1-9: Select  j/k: Navigate  Esc: Cancel"))
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
 func (m *Model) viewEventEditor() string {
 	var sections []string
 

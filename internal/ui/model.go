@@ -21,9 +21,10 @@ const (
 	ViewHourly ViewMode = iota
 	ViewHelp
 	ViewEventEditor
-	ViewEventSelector // For choosing between multiple events
-	ViewGotoDate      // For entering a date to jump to
-	ViewSearch        // For entering search terms
+	ViewEventSelector     // For choosing between multiple events
+	ViewGotoDate          // For entering a date to jump to
+	ViewSearch            // For entering search terms
+	ViewClipboardSelector // For choosing which event to cut/copy
 )
 
 type Model struct {
@@ -62,8 +63,9 @@ type Model struct {
 	selectedEventIndex int
 
 	// Clipboard state
-	clipboardEvent *remind.Event
-	clipboardCut   bool // true if event was cut (should be removed on paste)
+	clipboardEvent     *remind.Event
+	clipboardCut       bool   // true if event was cut (should be removed on paste)
+	clipboardOperation string // "cut" or "copy" - which operation is pending
 
 	// Untimed reminders state
 	focusUntimed         bool // true when focused on untimed reminders box
@@ -236,6 +238,8 @@ func (m *Model) View() string {
 		return m.viewGotoDate()
 	case ViewSearch:
 		return m.viewSearch()
+	case ViewClipboardSelector:
+		return m.viewClipboardSelector()
 	default:
 		panic("unhandled mode")
 	}
@@ -340,6 +344,8 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleGotoDateKeys(msg)
 	case ViewSearch:
 		return m.handleSearchKeys(msg)
+	case ViewClipboardSelector:
+		return m.handleClipboardSelectorKeys(msg)
 	}
 
 	return m, nil
@@ -953,8 +959,6 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "copy":
-		var selectedEvent *remind.Event
-
 		// If focused on untimed reminders, copy the selected untimed reminder
 		if m.focusUntimed {
 			// Calculate the selected date based on the selected slot
@@ -972,29 +976,35 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.events[i].Date.Year() == selectedDate.Year() &&
 					m.events[i].Date.YearDay() == selectedDate.YearDay() {
 					if eventIndex == m.selectedUntimedIndex {
-						selectedEvent = &m.events[i]
+						m.clipboardEvent = &m.events[i]
+						m.clipboardCut = false
+						m.showMessage("Event copied to clipboard")
 						break
 					}
 					eventIndex++
 				}
 			}
 		} else {
-			// Copy the event at the selected time slot
-			selectedEvent = m.findEventAtSlot(m.selectedSlot)
-		}
-
-		if selectedEvent != nil {
-			m.clipboardEvent = selectedEvent
-			m.clipboardCut = false
-			m.showMessage("Event copied to clipboard")
-		} else {
-			m.showMessage("No event at current time to copy")
+			// Get all events at the selected time slot
+			events := m.getEventsAtSlot(m.selectedSlot)
+			if len(events) == 0 {
+				m.showMessage("No event at current time to copy")
+			} else if len(events) == 1 {
+				// Single event - copy directly
+				m.clipboardEvent = &events[0]
+				m.clipboardCut = false
+				m.showMessage("Event copied to clipboard")
+			} else {
+				// Multiple events - show selector
+				m.eventChoices = events
+				m.selectedEventIndex = 0
+				m.clipboardOperation = "copy"
+				m.mode = ViewClipboardSelector
+			}
 		}
 		return m, nil
 
 	case "cut":
-		var selectedEvent *remind.Event
-
 		// If focused on untimed reminders, cut the selected untimed reminder
 		if m.focusUntimed {
 			// Calculate the selected date based on the selected slot
@@ -1012,38 +1022,60 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.events[i].Date.Year() == selectedDate.Year() &&
 					m.events[i].Date.YearDay() == selectedDate.YearDay() {
 					if eventIndex == m.selectedUntimedIndex {
-						selectedEvent = &m.events[i]
+						// Store in clipboard
+						m.clipboardEvent = &m.events[i]
+						m.clipboardCut = true
+
+						// Immediately remove from file
+						if m.remindClient == nil {
+							m.showMessage("Cannot remove events: remind client not available")
+							return m, nil
+						}
+						if err := m.remindClient.RemoveEvent(m.events[i]); err != nil {
+							m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
+							m.clipboardEvent = nil
+							m.clipboardCut = false
+						} else {
+							m.showMessage("Event cut to clipboard")
+							// Reload events to show the change
+							m.loadEvents()
+						}
 						break
 					}
 					eventIndex++
 				}
 			}
 		} else {
-			// Cut the event at the selected time slot
-			selectedEvent = m.findEventAtSlot(m.selectedSlot)
-		}
+			// Get all events at the selected time slot
+			events := m.getEventsAtSlot(m.selectedSlot)
+			if len(events) == 0 {
+				m.showMessage("No event at current time to cut")
+			} else if len(events) == 1 {
+				// Single event - cut directly
+				m.clipboardEvent = &events[0]
+				m.clipboardCut = true
 
-		if selectedEvent != nil {
-			// Store in clipboard
-			m.clipboardEvent = selectedEvent
-			m.clipboardCut = true
-
-			// Immediately remove from file
-			if m.remindClient == nil {
-				m.showMessage("Cannot remove events: remind client not available")
-				return m, nil
-			}
-			if err := m.remindClient.RemoveEvent(*selectedEvent); err != nil {
-				m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
-				m.clipboardEvent = nil
-				m.clipboardCut = false
+				// Immediately remove from file
+				if m.remindClient == nil {
+					m.showMessage("Cannot remove events: remind client not available")
+					return m, nil
+				}
+				if err := m.remindClient.RemoveEvent(events[0]); err != nil {
+					m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
+					m.clipboardEvent = nil
+					m.clipboardCut = false
+				} else {
+					m.showMessage("Event cut to clipboard")
+					// Reload events to show the change
+					m.loadEvents()
+				}
 			} else {
-				m.showMessage("Event cut to clipboard")
-				// Reload events to show the change
-				m.loadEvents()
+				// Multiple events - show selector
+				m.eventChoices = events
+				m.selectedEventIndex = 0
+				m.clipboardOperation = "cut"
+				m.mode = ViewClipboardSelector
 			}
-		} else {
-			m.showMessage("No event at current time to cut")
 		}
 		return m, nil
 
@@ -1573,6 +1605,129 @@ func (m *Model) handleSearchKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		found := m.findNextSearchResult()
 		if !found {
 			m.showMessage("No more search results found.")
+		}
+	}
+
+	return m, nil
+}
+
+func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Get the key string and action
+	key := msg.String()
+	// Handle special key representations
+	switch key {
+	case "up":
+		key = "<up>"
+	case "down":
+		key = "<down>"
+	case "enter":
+		key = "<enter>"
+	case "esc":
+		key = "<esc>"
+	}
+
+	action := m.getActionForKey(key)
+
+	// Also check the raw key for actions
+	switch action {
+	case "entry_cancel":
+		// Cancel selection and return to hourly view
+		m.mode = ViewHourly
+		m.eventChoices = nil
+		m.selectedEventIndex = 0
+		m.clipboardOperation = ""
+		return m, nil
+
+	case "scroll_down":
+		// Move down in the list
+		if m.selectedEventIndex < len(m.eventChoices)-1 {
+			m.selectedEventIndex++
+		}
+		return m, nil
+
+	case "scroll_up":
+		// Move up in the list
+		if m.selectedEventIndex > 0 {
+			m.selectedEventIndex--
+		}
+		return m, nil
+
+	case "entry_complete":
+		// Select the current event for clipboard operation
+		if m.selectedEventIndex < len(m.eventChoices) {
+			event := m.eventChoices[m.selectedEventIndex]
+
+			if m.clipboardOperation == "copy" {
+				// Copy the selected event
+				m.clipboardEvent = &event
+				m.clipboardCut = false
+				m.showMessage("Event copied to clipboard")
+			} else if m.clipboardOperation == "cut" {
+				// Cut the selected event
+				m.clipboardEvent = &event
+				m.clipboardCut = true
+
+				// Immediately remove from file
+				if m.remindClient == nil {
+					m.showMessage("Cannot remove events: remind client not available")
+				} else if err := m.remindClient.RemoveEvent(event); err != nil {
+					m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
+					m.clipboardEvent = nil
+					m.clipboardCut = false
+				} else {
+					m.showMessage("Event cut to clipboard")
+					// Reload events to show the change
+					m.loadEvents()
+				}
+			}
+
+			// Return to hourly view
+			m.mode = ViewHourly
+			m.eventChoices = nil
+			m.selectedEventIndex = 0
+			m.clipboardOperation = ""
+		}
+		return m, nil
+	}
+
+	// Handle numeric keys for quick selection (1-9)
+	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+		index := int(key[0] - '1')
+		if index < len(m.eventChoices) {
+			m.selectedEventIndex = index
+			// Automatically select if numeric key pressed
+			event := m.eventChoices[m.selectedEventIndex]
+
+			if m.clipboardOperation == "copy" {
+				// Copy the selected event
+				m.clipboardEvent = &event
+				m.clipboardCut = false
+				m.showMessage("Event copied to clipboard")
+			} else if m.clipboardOperation == "cut" {
+				// Cut the selected event
+				m.clipboardEvent = &event
+				m.clipboardCut = true
+
+				// Immediately remove from file
+				if m.remindClient == nil {
+					m.showMessage("Cannot remove events: remind client not available")
+				} else if err := m.remindClient.RemoveEvent(event); err != nil {
+					m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
+					m.clipboardEvent = nil
+					m.clipboardCut = false
+				} else {
+					m.showMessage("Event cut to clipboard")
+					// Reload events to show the change
+					m.loadEvents()
+				}
+			}
+
+			// Return to hourly view
+			m.mode = ViewHourly
+			m.eventChoices = nil
+			m.selectedEventIndex = 0
+			m.clipboardOperation = ""
+			return m, nil
 		}
 	}
 
