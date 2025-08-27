@@ -2116,15 +2116,6 @@ func (m *Model) getEventsAtSlot(slot int) []remind.Event {
 	return events
 }
 
-// findEventAtSlot returns the first event at the specified time slot (for copy/cut operations)
-func (m *Model) findEventAtSlot(slot int) *remind.Event {
-	events := m.getEventsAtSlot(slot)
-	if len(events) > 0 {
-		return &events[0]
-	}
-	return nil
-}
-
 // findEventFile attempts to locate which remind file contains the given event
 func (m *Model) findEventFile(event remind.Event) (string, error) {
 	if len(m.config.RemindFiles) == 0 {
