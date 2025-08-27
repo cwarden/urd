@@ -5,10 +5,11 @@ A terminal calendar application inspired by wyrd, providing a TUI frontend for t
 ## Features
 
 - **Terminal-based Calendar Interface**: Navigate calendar with vim-style keybindings
-- **Hourly Schedule View**: Display events in hourly/30-minute/15-minute time slots
+- **Hourly Schedule View**: Display events in hourly/30-minute/15-minute time slots with multi-slot spanning for duration events
 - **Natural Language Event Entry**: Add events using phrases like "tomorrow 2pm meeting"
-- **Multiple Views**: Calendar grid, hourly schedule, timed reminders, untimed reminders
 - **Live File Watching**: Auto-refresh when remind files change
+- **Search & Navigation**: Search for events and quickly navigate to specific dates with goto
+- **Cut/Copy/Paste**: Full clipboard support for event management
 - **Customizable**: Extensive configuration via urdrc file
 - **Priority Support**: Mark events with priority levels (!, !!, !!!)
 - **Tag Support**: Organize events with @tags
@@ -43,11 +44,11 @@ urd
 # List today's events
 urd --list
 
-# Use specific config file
-urd --config ~/.config/urd/myconfig.rc
+# List today's events
+urd list
 
 # Show version
-urd --version
+urd version
 ```
 
 **Note**: The application will warn if `remind` is not installed but will still start the TUI interface. Install `remind` to see actual calendar events.
@@ -63,7 +64,13 @@ Key bindings are fully customizable via the urdrc configuration file. Configured
 - `L` - Next day
 - `K` - Previous week
 - `J` - Next week
+- `<` - Previous month
+- `>` - Next month
 - `o` - Go to current time (home)
+- `g` - Go to specific date
+- `/` - Search for events
+- `n` - Next search result
+- `N` - Previous search result
 - `z` - Zoom (cycle between 1 hour, 30 minute, and 15 minute time slots)
 
 ### Actions
@@ -72,6 +79,9 @@ Key bindings are fully customizable via the urdrc configuration file. Configured
 - `u` - Add new untimed reminder
 - `q` - Quick add event
 - `e` - Edit reminder file
+- `d` - Cut/delete event to clipboard
+- `y` - Copy event to clipboard
+- `p` - Paste event from clipboard
 - `Ctrl+L` - Refresh
 - `?` - Toggle help
 - `Q` - Quit
@@ -200,12 +210,24 @@ make dev
 
 ```
 urd/
-├── cmd/urd/           # Main application entry point
+├── cmd/                # Command line interface (Cobra commands)
+│   ├── list.go         # List events command
+│   ├── root.go         # Root command and TUI launcher
+│   └── version.go      # Version command
 ├── internal/
 │   ├── config/         # Configuration management
 │   ├── parser/         # Natural language parser
-│   ├── remind/         # Remind interface and file watching
+│   ├── remind/         # Remind and P2 integration
+│   │   ├── composite.go    # Composite source for multiple backends
+│   │   ├── p2client.go     # P2 task manager integration
+│   │   ├── remind.go       # Remind calendar interface
+│   │   └── timeparse.go    # Time parsing utilities
 │   └── ui/             # Bubbletea TUI components
+│       ├── model.go        # Core application state
+│       ├── canvas_view.go  # Canvas-based rendering
+│       ├── views.go        # View modes and dialogs
+│       └── helpers.go      # UI utility functions
+├── main.go             # Application entry point
 ├── Makefile            # Build configuration
 └── go.mod              # Go dependencies
 ```
