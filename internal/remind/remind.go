@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -153,6 +155,157 @@ func (c *Client) GetEventsForDate(date time.Time) ([]Event, error) {
 	start := time.Date(date.Year(), date.Month(), date.Day(), 0, 0, 0, 0, date.Location())
 	end := time.Date(date.Year(), date.Month(), date.Day(), 23, 59, 59, 999999999, date.Location())
 	return c.GetEvents(start, end)
+}
+
+// FindNext finds the next occurrence of events matching the search term after the given time
+// This uses 'remind -n' which searches forward indefinitely
+func (c *Client) FindNext(searchTerm string, afterTime time.Time) (*Event, error) {
+	if len(c.Files) == 0 {
+		return nil, fmt.Errorf("no remind files configured")
+	}
+
+	searchLower := strings.ToLower(searchTerm)
+
+	// Use remind -n to get next occurrences of all reminders from the given date
+	// We need to run it twice: once from the current date, once from the next day
+	// to avoid missing recurring events that fall today but before afterTime
+	date1 := afterTime
+	date2 := afterTime.AddDate(0, 0, 1)
+
+	// Collect results from both dates
+	var results []Event
+	dates := []time.Time{date1, date2}
+
+	for _, date := range dates {
+		// Build command: remind -n -b1 file1 file2 ... Dec 25 2025
+		// Note: month, day, year are separate arguments
+		args := []string{"-n", "-b1"}
+		args = append(args, c.Files...)
+		args = append(args,
+			date.Format("Jan"),  // Month
+			date.Format("2"),    // Day
+			date.Format("2006")) // Year
+
+		cmd := exec.Command(c.RemindPath, args...)
+		output, err := cmd.Output()
+		if err != nil {
+			// If remind fails for this date, continue with next
+			continue
+		}
+
+		events, err := c.parseRemindNextOutput(string(output))
+		if err != nil {
+			continue
+		}
+		results = append(results, events...)
+	}
+
+	// Sort by date/time and find first match after afterTime
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Date.Equal(results[j].Date) {
+			if results[i].Time == nil && results[j].Time == nil {
+				return false
+			}
+			if results[i].Time == nil {
+				return false
+			}
+			if results[j].Time == nil {
+				return true
+			}
+			return results[i].Time.Before(*results[j].Time)
+		}
+		return results[i].Date.Before(results[j].Date)
+	})
+
+	// Find first matching event after afterTime
+	for _, event := range results {
+		// Check if event is after the search start time
+		eventTime := event.Date
+		if event.Time != nil {
+			eventTime = time.Date(event.Date.Year(), event.Date.Month(), event.Date.Day(),
+				event.Time.Hour(), event.Time.Minute(), 0, 0, event.Date.Location())
+		}
+
+		if eventTime.After(afterTime) {
+			// Check if description matches
+			if strings.Contains(strings.ToLower(event.Description), searchLower) {
+				return &event, nil
+			}
+			// Check tags
+			for _, tag := range event.Tags {
+				if strings.Contains(strings.ToLower(tag), searchLower) {
+					return &event, nil
+				}
+			}
+		}
+	}
+
+	return nil, nil // No match found
+}
+
+// parseRemindNextOutput parses the output of 'remind -n'
+func (c *Client) parseRemindNextOutput(output string) ([]Event, error) {
+	var events []Event
+	scanner := bufio.NewScanner(strings.NewReader(output))
+
+	// remind -n output format:
+	// YYYY/MM/DD Message (for untimed)
+	// YYYY/MM/DD HH:MM Message (for timed)
+	timedLineRe := regexp.MustCompile(`^(\d{4})/(\d{2})/(\d{2})\s+(\d{1,2}):(\d{2})\s+(.+)$`)
+	untimedLineRe := regexp.MustCompile(`^(\d{4})/(\d{2})/(\d{2})\s+(.+)$`)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+
+		// Try timed format first
+		if matches := timedLineRe.FindStringSubmatch(line); matches != nil {
+			year, _ := strconv.Atoi(matches[1])
+			month, _ := strconv.Atoi(matches[2])
+			day, _ := strconv.Atoi(matches[3])
+			hour, _ := strconv.Atoi(matches[4])
+			minute, _ := strconv.Atoi(matches[5])
+			desc := matches[6]
+
+			date := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local)
+			eventTime := time.Date(year, time.Month(month), day, hour, minute, 0, 0, time.Local)
+
+			event := Event{
+				Date:        date,
+				Time:        &eventTime,
+				Description: desc,
+			}
+
+			// Parse priority and tags
+			event.Description, event.Priority, event.Tags = c.parseEventDetails(desc)
+			event.ID = c.generateEventID(event)
+
+			events = append(events, event)
+		} else if matches := untimedLineRe.FindStringSubmatch(line); matches != nil {
+			// Try untimed format
+			year, _ := strconv.Atoi(matches[1])
+			month, _ := strconv.Atoi(matches[2])
+			day, _ := strconv.Atoi(matches[3])
+			desc := matches[4]
+
+			date := time.Date(year, time.Month(month), day, 0, 0, 0, 0, time.Local)
+
+			event := Event{
+				Date:        date,
+				Description: desc,
+			}
+
+			// Parse priority and tags
+			event.Description, event.Priority, event.Tags = c.parseEventDetails(desc)
+			event.ID = c.generateEventID(event)
+
+			events = append(events, event)
+		}
+	}
+
+	return events, scanner.Err()
 }
 
 func (c *Client) parseRemindOutput(output string) ([]Event, error) {

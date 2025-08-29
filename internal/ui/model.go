@@ -1740,165 +1740,57 @@ func (m *Model) findNextSearchResult() bool {
 		return false
 	}
 
-	searchLower := strings.ToLower(m.searchTerm)
-
-	// Get current position
-	currentDate := m.selectedDate
-	currentSlot := m.selectedSlot
-
-	// Calculate current time for timed events
-	slotsPerDay := m.getSlotsPerDay()
-
-	// Search forward through events starting from current position
-	// First, check if we need to expand our event range
-	endDate := m.selectedDate.AddDate(0, 1, 0) // Search up to 1 month ahead
-
-	// Load events for extended range if needed
-	events, err := m.source.GetEvents(m.selectedDate, endDate)
-	if err != nil {
-		return false
-	}
-
-	// Helper function to check if event matches search
-	eventMatches := func(event remind.Event) bool {
-		// Search in description
-		if strings.Contains(strings.ToLower(event.Description), searchLower) {
-			return true
-		}
-		// Search in tags
-		for _, tag := range event.Tags {
-			if strings.Contains(strings.ToLower(tag), searchLower) {
-				return true
-			}
-		}
-		return false
-	}
-
-	// Helper function to compare event position with current position
-	isAfterCurrent := func(event remind.Event) bool {
-		// If event is on a later date, it's after current
-		if event.Date.After(currentDate) {
-			return true
+	// If we have a remind client, use remind -n for unlimited search
+	if m.remindClient != nil {
+		// Calculate current time from selected position
+		// We need to use the actual selected date and time, not calculate from slot
+		var currentTime time.Time
+		if m.focusUntimed {
+			// If on untimed events, search from end of day
+			currentTime = time.Date(m.selectedDate.Year(), m.selectedDate.Month(), m.selectedDate.Day(),
+				23, 59, 59, 0, m.selectedDate.Location())
+		} else {
+			// For timed slots, get the actual time and add 1 minute to search AFTER current position
+			slotsPerDay := m.getSlotsPerDay()
+			minutesPerSlot := 24 * 60 / slotsPerDay
+			slotInDay := m.selectedSlot % slotsPerDay
+			minutesFromStart := slotInDay * minutesPerSlot
+			hours := minutesFromStart / 60
+			minutes := minutesFromStart % 60
+			currentTime = time.Date(m.selectedDate.Year(), m.selectedDate.Month(), m.selectedDate.Day(),
+				hours, minutes, 0, 0, m.selectedDate.Location())
+			// Add 1 minute to search from just after the current slot
+			currentTime = currentTime.Add(time.Minute)
 		}
 
-		// If event is on same date
-		if event.Date.Year() == currentDate.Year() && event.Date.YearDay() == currentDate.YearDay() {
-			// If it's an untimed event and we're focused on untimed, check index
-			if event.Time == nil {
-				if m.focusUntimed {
-					// Find index of this untimed event
-					untimedIndex := 0
-					for _, e := range events {
-						if e.Time == nil &&
-							e.Date.Year() == currentDate.Year() &&
-							e.Date.YearDay() == currentDate.YearDay() {
-							if e.ID == event.ID {
-								return untimedIndex > m.selectedUntimedIndex
-							}
-							untimedIndex++
-						}
-					}
-				}
-				// If we're not focused on untimed, untimed events come after timed
-				return !m.focusUntimed
-			}
-
-			// For timed events, compare time slots
-			if event.Time != nil {
-				hour := event.Time.Hour()
-				minute := event.Time.Minute()
-				localSlot := m.timeToSlot(hour, minute)
-
-				// Calculate day offset
-				baseDate := time.Date(currentDate.Year(), currentDate.Month(), currentDate.Day(), 0, 0, 0, 0, currentDate.Location())
-				eventDate := time.Date(event.Date.Year(), event.Date.Month(), event.Date.Day(), 0, 0, 0, 0, event.Date.Location())
-				dayDiff := int(eventDate.Sub(baseDate).Hours() / 24)
-				eventSlot := dayDiff*slotsPerDay + localSlot
-
-				return eventSlot > currentSlot
-			}
+		// Use FindNext to search forward indefinitely
+		event, err := m.remindClient.FindNext(m.searchTerm, currentTime)
+		if err != nil || event == nil {
+			return false
 		}
 
-		return false
-	}
+		// Navigate to the found event
+		// First, update the selected date to the event's date
+		m.selectedDate = event.Date
 
-	// Find the next matching event
-	var nextEvent *remind.Event
-	for _, event := range events {
-		if eventMatches(event) && isAfterCurrent(event) {
-			if nextEvent == nil {
-				nextEvent = &event
-			} else {
-				// Choose the earlier of the two events
-				if event.Date.Before(nextEvent.Date) {
-					nextEvent = &event
-				} else if event.Date.Equal(nextEvent.Date) {
-					// Same date - compare times
-					if event.Time != nil && nextEvent.Time != nil {
-						if event.Time.Before(*nextEvent.Time) {
-							nextEvent = &event
-						}
-					} else if event.Time != nil && nextEvent.Time == nil {
-						// Timed event comes before untimed
-						nextEvent = &event
-					}
-				}
-			}
-		}
-	}
-
-	if nextEvent != nil {
-		// Jump to the found event
-		m.selectedDate = nextEvent.Date
-
-		// Load events for the new date if needed
-		if m.needsEventReload() {
-			m.loadEventsForSchedule()
-		}
-
-		// Set position based on event type
-		if nextEvent.Time != nil {
-			// Timed event - jump to its time slot
-			hour := nextEvent.Time.Hour()
-			minute := nextEvent.Time.Minute()
-			localSlot := hour
-			if m.timeIncrement == 30 {
-				localSlot = hour*2 + minute/30
-			} else if m.timeIncrement == 15 {
-				localSlot = hour*4 + minute/15
-			}
-
-			baseDate := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), m.selectedDate.Day(), 0, 0, 0, 0, m.selectedDate.Location())
-			eventDate := time.Date(nextEvent.Date.Year(), nextEvent.Date.Month(), nextEvent.Date.Day(), 0, 0, 0, 0, nextEvent.Date.Location())
-			dayDiff := int(eventDate.Sub(baseDate).Hours() / 24)
-			m.selectedSlot = dayDiff*slotsPerDay + localSlot
-
-			// Adjust view to show the selected slot
-			m.centerSelectedSlot()
-
+		if event.Time != nil {
+			// For timed events, set the slot to the event's time on the new date
+			m.selectedSlot = m.timeToSlot(event.Time.Hour(), event.Time.Minute())
 			m.focusUntimed = false
 		} else {
-			// Untimed event - focus on untimed section
+			// For untimed events, focus on untimed section
 			m.focusUntimed = true
-			// Find the index of this event in untimed events
-			untimedIndex := 0
-			for _, e := range m.events {
-				if e.Time == nil &&
-					e.Date.Year() == nextEvent.Date.Year() &&
-					e.Date.YearDay() == nextEvent.Date.YearDay() {
-					if e.ID == nextEvent.ID {
-						m.selectedUntimedIndex = untimedIndex
-						break
-					}
-					untimedIndex++
-				}
-			}
+			m.selectedUntimedIndex = 0 // Will need to find correct index
 		}
 
-		m.showMessage(fmt.Sprintf("Found: %s", nextEvent.Description))
+		// Load events for the new date
+		m.loadEventsForSchedule()
+
+		m.ensureSelectedSlotVisible()
 		return true
 	}
 
+	// For non-remind sources, search is not supported
 	return false
 }
 

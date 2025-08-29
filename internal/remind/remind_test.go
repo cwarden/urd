@@ -210,3 +210,123 @@ func TestGenerateEventID(t *testing.T) {
 		t.Errorf("ID doesn't have expected prefix: %s", id1)
 	}
 }
+
+func TestParseRemindNextOutput(t *testing.T) {
+	client := NewClient()
+
+	tests := []struct {
+		name     string
+		output   string
+		expected []Event
+	}{
+		{
+			name: "mixed timed and untimed events",
+			output: `2025/12/24 Christmas Eve
+2025/12/25 10:00 Christmas Brunch
+2025/12/25 Christmas Day
+2026/01/01 New Year's Day`,
+			expected: []Event{
+				{
+					Date:        time.Date(2025, 12, 24, 0, 0, 0, 0, time.Local),
+					Description: "Christmas Eve",
+				},
+				{
+					Date:        time.Date(2025, 12, 25, 0, 0, 0, 0, time.Local),
+					Time:        timePtr(time.Date(2025, 12, 25, 10, 0, 0, 0, time.Local)),
+					Description: "Christmas Brunch",
+				},
+				{
+					Date:        time.Date(2025, 12, 25, 0, 0, 0, 0, time.Local),
+					Description: "Christmas Day",
+				},
+				{
+					Date:        time.Date(2026, 1, 1, 0, 0, 0, 0, time.Local),
+					Description: "New Year's Day",
+				},
+			},
+		},
+		{
+			name: "events with priorities and tags",
+			output: `2025/08/29 18:00 Dinner @home
+2025/08/30 09:00 Important Meeting!! @work
+2025/08/31 All day task!!! @urgent`,
+			expected: []Event{
+				{
+					Date:        time.Date(2025, 8, 29, 0, 0, 0, 0, time.Local),
+					Time:        timePtr(time.Date(2025, 8, 29, 18, 0, 0, 0, time.Local)),
+					Description: "Dinner",
+					Tags:        []string{"home"},
+				},
+				{
+					Date:        time.Date(2025, 8, 30, 0, 0, 0, 0, time.Local),
+					Time:        timePtr(time.Date(2025, 8, 30, 9, 0, 0, 0, time.Local)),
+					Description: "Important Meeting",
+					Priority:    PriorityMedium,
+					Tags:        []string{"work"},
+				},
+				{
+					Date:        time.Date(2025, 8, 31, 0, 0, 0, 0, time.Local),
+					Description: "All day task",
+					Priority:    PriorityHigh,
+					Tags:        []string{"urgent"},
+				},
+			},
+		},
+		{
+			name:     "empty output",
+			output:   "",
+			expected: []Event{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events, err := client.parseRemindNextOutput(tt.output)
+			if err != nil {
+				t.Fatalf("Parse failed: %v", err)
+			}
+
+			if len(events) != len(tt.expected) {
+				t.Fatalf("Event count mismatch: got %d, want %d", len(events), len(tt.expected))
+			}
+
+			for i, event := range events {
+				expected := tt.expected[i]
+
+				if !event.Date.Equal(expected.Date) {
+					t.Errorf("Event %d: Date mismatch: got %v, want %v", i, event.Date, expected.Date)
+				}
+
+				if (event.Time == nil) != (expected.Time == nil) {
+					t.Errorf("Event %d: Time nil mismatch", i)
+				} else if event.Time != nil && !event.Time.Equal(*expected.Time) {
+					t.Errorf("Event %d: Time mismatch: got %v, want %v", i, event.Time, expected.Time)
+				}
+
+				if event.Description != expected.Description {
+					t.Errorf("Event %d: Description mismatch: got %q, want %q", i, event.Description, expected.Description)
+				}
+
+				if event.Priority != expected.Priority {
+					t.Errorf("Event %d: Priority mismatch: got %v, want %v", i, event.Priority, expected.Priority)
+				}
+
+				if !slicesEqual(event.Tags, expected.Tags) {
+					t.Errorf("Event %d: Tags mismatch: got %v, want %v", i, event.Tags, expected.Tags)
+				}
+			}
+		})
+	}
+}
+
+func slicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
