@@ -72,25 +72,21 @@ Key bindings are fully customizable via the urdrc configuration file. Configured
 - `Enter` - Edit existing reminder or create new one at cursor
 - `t` - Add new timed reminder using template
 - `u` - Add new untimed reminder
-- `q` - Quick add event
+- `a` - Quick add event
 - `e` - Edit reminder file
-- `d` - Cut/delete event to clipboard
+- `X` - Cut/delete event to clipboard
 - `y` - Copy event to clipboard
 - `p` - Paste event from clipboard
 - `Ctrl+L` - Refresh
 - `?` - Toggle help
 - `Q` - Quit
-- `i` - Toggle event IDs (default, can be overridden)
+- `i` - Toggle event IDs
 
 ### Template-Based Creation
 - `w` - Weekly recurring reminder (template0)
 - `m` - Monthly recurring reminder (template2)
 - `M` - Monthly untimed reminder (template3)
-- `T` - Todo item with floating date (template4)
-- `I` - Instantaneous reminder (no duration) (template5)
-- `G` - Goal with due date (template6)
-- `f` - Floating date reminder (template7)
-- `W` - Weekday floating reminder (template8)
+- `I` - Instantaneous reminder (template4)
 - `U` - Untimed reminder with dialog
 
 ### Event Selection
@@ -142,7 +138,7 @@ bind "z" zoom
 bind "<enter>" edit
 bind "e" edit_any
 bind "t" new_timed
-bind "q" quick_add
+bind "a" quick_add
 bind "\\Cl" refresh
 bind "?" help
 bind "Q" quit

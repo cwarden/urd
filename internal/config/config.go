@@ -74,29 +74,47 @@ func DefaultConfig() *Config {
 		},
 
 		KeyBindings: map[string]string{
-			// Default key -> action mappings
-			"j":       "scroll_down",
-			"k":       "scroll_up",
-			"<down>":  "scroll_down",
-			"<up>":    "scroll_up",
-			"L":       "next_day",
-			"H":       "previous_day",
-			"J":       "next_week",
-			"K":       "previous_week",
-			"{":       "previous_month",
-			"}":       "next_month",
-			"o":       "home",
-			"g":       "goto",
-			"z":       "zoom",
-			"/":       "begin_search",
-			"n":       "search_next",
+			// Navigation (Hourly View)
+			"j":      "scroll_down",
+			"k":      "scroll_up",
+			"<down>": "scroll_down",
+			"<up>":   "scroll_up",
+			"H":      "previous_day",
+			"L":      "next_day",
+			"K":      "previous_week",
+			"J":      "next_week",
+			"<":      "previous_month",
+			">":      "next_month",
+			"o":      "home",
+			"g":      "goto",
+			"/":      "begin_search",
+			"n":      "search_next",
+			"N":      "search_previous",
+			"z":      "zoom",
+
+			// Actions
 			"<enter>": "edit",
-			"e":       "edit_any",
 			"t":       "new_timed",
-			"q":       "quick_add",
+			"u":       "new_untimed",
+			"a":       "quick_add",
+			"e":       "edit_any",
+			"X":       "cut",
+			"y":       "copy",
+			"p":       "paste",
+			"\\Cl":    "refresh",
 			"?":       "help",
 			"Q":       "quit",
-			"<tab>":   "next_area",
+			"i":       "toggle_ids",
+
+			// Template-Based Creation
+			"w": "new_template0",
+			"m": "new_template2",
+			"M": "new_template3",
+			"I": "new_template4",
+			"U": "new_untimed_dialog",
+
+			// Other
+			"<tab>": "next_area",
 		},
 
 		StartupView:   "month",
@@ -105,20 +123,20 @@ func DefaultConfig() *Config {
 		ConfirmDelete: true,
 		WrapText:      true,
 
-		QuickTemplate:   `REM %monname% %mday% %year% MSG %"<++>%" %`,
-		TimedTemplate:   `REM %monname% %mday% %year% <++>AT %hour%:%min% +%dura%<++> DURATION %dura%:00<++> MSG %"<++>%" %`,
-		AllDayTemplate:  `REM %monname% %mday% %year% MSG %"<++>%" %`,
-		UntimedTemplate: `REM %monname% %mday% %year% <++>MSG %"<++>%" %`,
+		QuickTemplate:   `REM %monname% %mday% %year% MSG %"<++>%"%`,
+		TimedTemplate:   `REM %monname% %mday% %year% <++>AT %hour%:%min% +%dura%<++> DURATION %dura%:00<++> MSG %"<++>%"%`,
+		AllDayTemplate:  `REM %monname% %mday% %year% MSG %"<++>%"%`,
+		UntimedTemplate: `REM %monname% %mday% %year% <++>MSG %"<++>%"%`,
 		Templates: [10]string{
-			`REM %wdayname% AT %hour%:%min% DURATION 1:00 MSG `,                                                        // template0 - weekly recurrence
-			`REM %wdayname% MSG `,                                                                                      // template1 - weekly untimed
-			`REM %mday% AT %hour%:%min% DURATION 1:00 MSG `,                                                            // template2 - monthly recurrence
-			`REM %mday% MSG `,                                                                                          // template3 - monthly untimed
-			`REM [float(%year%,%mon%,%mday%)] MSG <++>%"%"`,                                                            // template4 - todo
-			`REM %monname% %mday% %year% AT %hour%:%min% <++>MSG %"<++>%" %`,                                           // template5 - instantaneous
-			`REM [float(%year%,%mon%,%mday%)] MSG <++> [due(%year%,%mon%<++>,%mday%<++>)]%"%"`,                         // template6 - goal
-			`REM [float(%year%,%mon%,%mday%)] <++>AT %hour%:%min% <++> MSG %"<++>%"`,                                   // template7 - float
-			`REM Mon Tue Wed Thu Fri <++> SCANFROM [float(%year%,%mon%,%mday%)] <++>AT %hour%:%min% <++> MSG %"<++>%"`, // template8 - weekday float
+			`REM %wdayname% AT %hour%:%min% DURATION 1:00 MSG`, // template0 - weekly recurrence
+			`REM %wdayname% MSG`,                              // template1 - weekly untimed
+			`REM %mday% AT %hour%:%min% DURATION 1:00 MSG`,    // template2 - monthly recurrence
+			`REM %mday% MSG`,                                  // template3 - monthly untimed
+			`REM %monname% %mday% %year% AT %hour%:%min% MSG`, // template4 - instantaneous
+			``, // template5 - unused
+			``, // template6 - unused
+			``, // template7 - unused
+			``, // template8 - unused
 			``, // template9 - unused
 		},
 
