@@ -52,8 +52,7 @@ func runList(cmd *cobra.Command, args []string) error {
 	// Get today's events - normalize to midnight for date comparison
 	now := time.Now()
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
-	tomorrow := today.AddDate(0, 0, 1)
-	events, err := source.GetEvents(today, tomorrow)
+	events, err := source.GetEvents(today, today)
 	if err != nil {
 		return fmt.Errorf("error getting events: %w", err)
 	}

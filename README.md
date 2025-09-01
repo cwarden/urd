@@ -42,13 +42,8 @@ make install
 urd
 
 # List today's events
-urd --list
-
-# List today's events
 urd list
 
-# Show version
-urd version
 ```
 
 **Note**: The application will warn if `remind` is not installed but will still start the TUI interface. Install `remind` to see actual calendar events.
