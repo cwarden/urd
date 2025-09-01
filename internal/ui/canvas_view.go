@@ -532,7 +532,6 @@ func (m *Model) createSidebarLayer(xOffset, width int) *lipgloss.Layer {
 	var lines []string
 
 	// Add calendar
-	lines = append(lines, m.styles.Header.Render("Calendar"))
 	calendarContent := m.renderMiniCalendar()
 	lines = append(lines, calendarContent)
 
@@ -540,7 +539,6 @@ func (m *Model) createSidebarLayer(xOffset, width int) *lipgloss.Layer {
 	lines = append(lines, "")
 
 	// Add current slot info
-	lines = append(lines, m.styles.Header.Render("Selected"))
 	selectedContent := m.renderSelectedSlotEvents()
 	lines = append(lines, selectedContent)
 
