@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -25,6 +27,7 @@ const (
 	ViewGotoDate          // For entering a date to jump to
 	ViewSearch            // For entering search terms
 	ViewClipboardSelector // For choosing which event to cut/copy
+	ViewURLSelector       // For choosing which URL to open
 )
 
 type Model struct {
@@ -76,6 +79,10 @@ type Model struct {
 	searchResults    []remind.Event // events matching search
 	currentSearchHit int            // index in searchResults
 	lastSearchDate   time.Time      // when we last searched (for cache invalidation)
+
+	// URL selector state
+	urlChoices       []string // URLs to choose from
+	selectedURLIndex int      // index of selected URL
 
 	// Activity tracking
 	lastKeyInput time.Time // last time a key was pressed
@@ -240,6 +247,8 @@ func (m *Model) View() string {
 		return m.viewSearch()
 	case ViewClipboardSelector:
 		return m.viewClipboardSelector()
+	case ViewURLSelector:
+		return m.viewURLSelector()
 	default:
 		panic("unhandled mode")
 	}
@@ -275,6 +284,8 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		key = "<home>"
 	case "ctrl+l":
 		key = "\\Cl"
+	case "ctrl+b":
+		key = "\\Cb"
 	}
 
 	// Look up the action for this key
@@ -346,6 +357,8 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.handleSearchKeys(msg)
 	case ViewClipboardSelector:
 		return m.handleClipboardSelectorKeys(msg)
+	case ViewURLSelector:
+		return m.handleURLSelectorKeys(msg)
 	}
 
 	return m, nil
@@ -422,6 +435,10 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		key = "<pagedown>"
 	case "home":
 		key = "<home>"
+	case "ctrl+l":
+		key = "\\Cl"
+	case "ctrl+b":
+		key = "\\Cb"
 	}
 
 	action := m.getActionForKey(key)
@@ -1224,6 +1241,57 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
 		}
 		return m, nil
+
+	case "open_url":
+		// Extract URLs from the current event(s)
+		var urls []string
+
+		if m.focusUntimed {
+			// Get selected untimed event
+			dayOffset := m.selectedSlot / slotsPerDay
+			if m.selectedSlot < 0 {
+				dayOffset = -1 + (m.selectedSlot+1)/slotsPerDay
+			}
+			selectedDate := m.selectedDate.AddDate(0, 0, dayOffset)
+
+			untimedEvents := m.getSortedUntimedEvents(selectedDate)
+			if m.selectedUntimedIndex < len(untimedEvents) {
+				event := untimedEvents[m.selectedUntimedIndex]
+				urls = extractURLs(event.Description + " " + event.Body)
+			}
+		} else {
+			// Get events at current slot
+			events := m.getEventsAtSlot(m.selectedSlot)
+			for _, event := range events {
+				eventURLs := extractURLs(event.Description + " " + event.Body)
+				urls = append(urls, eventURLs...)
+			}
+		}
+
+		// Deduplicate URLs
+		seen := make(map[string]bool)
+		var uniqueURLs []string
+		for _, url := range urls {
+			if !seen[url] {
+				seen[url] = true
+				uniqueURLs = append(uniqueURLs, url)
+			}
+		}
+
+		if len(uniqueURLs) == 0 {
+			m.showMessage("No URLs found in current reminder(s)")
+			return m, nil
+		} else if len(uniqueURLs) == 1 {
+			// Open single URL directly
+			m.showMessage(fmt.Sprintf("Opening URL: %s", uniqueURLs[0]))
+			return m, openURLCmd(uniqueURLs[0])
+		} else {
+			// Multiple URLs - show selector
+			m.urlChoices = uniqueURLs
+			m.selectedURLIndex = 0
+			m.mode = ViewURLSelector
+			return m, nil
+		}
 	}
 
 	// Handle tab key for switching focus between timed and untimed reminders
@@ -1728,6 +1796,113 @@ func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea
 			m.selectedEventIndex = 0
 			m.clipboardOperation = ""
 			return m, nil
+		}
+	}
+
+	return m, nil
+}
+
+func (m *Model) handleURLSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Get the key string and action
+	key := msg.String()
+
+	// Handle special key representations
+	switch key {
+	case "up":
+		key = "<up>"
+	case "down":
+		key = "<down>"
+	case "enter":
+		key = "<enter>"
+	case "esc":
+		key = "<esc>"
+	}
+
+	action := m.getActionForKey(key)
+
+	// Also check the raw key for actions
+	switch action {
+	case "entry_cancel":
+		// Cancel selection and return to hourly view
+		m.mode = ViewHourly
+		m.urlChoices = nil
+		m.selectedURLIndex = 0
+		return m, nil
+
+	case "scroll_down":
+		// Move down in the list
+		if m.selectedURLIndex < len(m.urlChoices)-1 {
+			m.selectedURLIndex++
+		}
+		return m, nil
+
+	case "scroll_up":
+		// Move up in the list
+		if m.selectedURLIndex > 0 {
+			m.selectedURLIndex--
+		}
+		return m, nil
+
+	case "entry_complete":
+		// Open the selected URL
+		if m.selectedURLIndex < len(m.urlChoices) {
+			url := m.urlChoices[m.selectedURLIndex]
+			m.showMessage(fmt.Sprintf("Opening URL: %s", url))
+			// Return to hourly view
+			m.mode = ViewHourly
+			m.urlChoices = nil
+			m.selectedURLIndex = 0
+			return m, openURLCmd(url)
+		}
+		return m, nil
+	}
+
+	// Handle key string directly if no action was found
+	switch key {
+	case "<esc>", "q":
+		// Cancel and return to hourly view
+		m.mode = ViewHourly
+		m.urlChoices = nil
+		m.selectedURLIndex = 0
+		return m, nil
+
+	case "<down>", "j":
+		if m.selectedURLIndex < len(m.urlChoices)-1 {
+			m.selectedURLIndex++
+		}
+		return m, nil
+
+	case "<up>", "k":
+		if m.selectedURLIndex > 0 {
+			m.selectedURLIndex--
+		}
+		return m, nil
+
+	case "<enter>":
+		// Open the selected URL
+		if m.selectedURLIndex < len(m.urlChoices) {
+			url := m.urlChoices[m.selectedURLIndex]
+			m.showMessage(fmt.Sprintf("Opening URL: %s", url))
+			// Return to hourly view
+			m.mode = ViewHourly
+			m.urlChoices = nil
+			m.selectedURLIndex = 0
+			return m, openURLCmd(url)
+		}
+		return m, nil
+	}
+
+	// Handle numeric keys for quick selection (1-9)
+	if len(key) == 1 && key[0] >= '1' && key[0] <= '9' {
+		index := int(key[0] - '1')
+		if index < len(m.urlChoices) {
+			url := m.urlChoices[index]
+			m.showMessage(fmt.Sprintf("Opening URL: %s", url))
+			// Return to hourly view
+			m.mode = ViewHourly
+			m.urlChoices = nil
+			m.selectedURLIndex = 0
+			return m, openURLCmd(url)
 		}
 	}
 
@@ -2273,6 +2448,84 @@ func (m *Model) parseCommand(command string) ([]string, error) {
 	}
 
 	return parts, nil
+}
+
+// extractURLs extracts URLs from the given text
+func extractURLs(text string) []string {
+	// Regular expression to match URLs
+	urlRegex := regexp.MustCompile(`https?://[^\s<>"{}|\\^\[\]` + "`" + `]+`)
+	matches := urlRegex.FindAllString(text, -1)
+
+	// Remove trailing punctuation from URLs
+	var urls []string
+	for _, url := range matches {
+		// Trim common trailing punctuation that might not be part of the URL
+		url = strings.TrimRight(url, ".,;:!?")
+		// Remove trailing parenthesis if not balanced
+		if strings.Count(url, "(") < strings.Count(url, ")") {
+			url = strings.TrimRight(url, ")")
+		}
+		urls = append(urls, url)
+	}
+
+	// Deduplicate URLs
+	seen := make(map[string]bool)
+	var uniqueURLs []string
+	for _, url := range urls {
+		if !seen[url] {
+			seen[url] = true
+			uniqueURLs = append(uniqueURLs, url)
+		}
+	}
+
+	return uniqueURLs
+}
+
+// openURLCmd returns a tea.Cmd that opens the given URL in a browser
+func openURLCmd(url string) tea.Cmd {
+	return func() tea.Msg {
+		var cmd *exec.Cmd
+
+		// Try to detect the platform and use the appropriate command
+		switch runtime.GOOS {
+		case "darwin":
+			cmd = exec.Command("open", url)
+		case "windows":
+			cmd = exec.Command("cmd", "/c", "start", url)
+		default:
+			// Linux and other Unix-like systems
+			// Try xdg-open first (most common), then fallback to other options
+			if _, err := exec.LookPath("xdg-open"); err == nil {
+				cmd = exec.Command("xdg-open", url)
+			} else if _, err := exec.LookPath("gnome-open"); err == nil {
+				cmd = exec.Command("gnome-open", url)
+			} else if _, err := exec.LookPath("kde-open"); err == nil {
+				cmd = exec.Command("kde-open", url)
+			} else {
+				// If no GUI opener is found, try common browsers directly
+				browsers := []string{"firefox", "chromium", "google-chrome", "chrome"}
+				for _, browser := range browsers {
+					if _, err := exec.LookPath(browser); err == nil {
+						cmd = exec.Command(browser, url)
+						break
+					}
+				}
+			}
+		}
+
+		if cmd == nil {
+			return editorFinishedMsg{err: fmt.Errorf("could not find a browser to open URL")}
+		}
+
+		// Start the browser in the background
+		err := cmd.Start()
+		if err != nil {
+			return editorFinishedMsg{err: fmt.Errorf("failed to open URL: %w", err)}
+		}
+
+		// Don't wait for the browser to close
+		return editorFinishedMsg{err: nil}
+	}
 }
 
 // Message types

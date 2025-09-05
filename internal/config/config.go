@@ -105,6 +105,7 @@ func DefaultConfig() *Config {
 			"?":       "help",
 			"Q":       "quit",
 			"i":       "toggle_ids",
+			"\\Cb":    "open_url",
 
 			// Template-Based Creation
 			"w": "new_template0",

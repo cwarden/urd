@@ -44,6 +44,8 @@ func (m *Model) viewHelp() string {
 		"copy":  "Copy reminder",
 		"cut":   "Cut reminder",
 		"paste": "Paste reminder",
+		// URLs
+		"open_url": "Open URL from reminder",
 		// Search
 		"begin_search": "Begin search",
 		"search_next":  "Search next",
@@ -416,6 +418,40 @@ func (m *Model) viewSearch() string {
 
 	help := m.styles.Help.Render("Enter to search, n for next result, Esc to cancel")
 	sections = append(sections, help)
+
+	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+}
+
+func (m *Model) viewURLSelector() string {
+	var sections []string
+
+	header := m.styles.Header.Render("Select URL to Open")
+	sections = append(sections, header)
+	sections = append(sections, "")
+
+	if len(m.urlChoices) == 0 {
+		sections = append(sections, m.styles.Help.Render("No URLs to select"))
+	} else {
+		for i, url := range m.urlChoices {
+			prefix := fmt.Sprintf("%d. ", i+1)
+
+			// Truncate URL if too long for display
+			displayURL := url
+			if len(displayURL) > 70 {
+				displayURL = displayURL[:67] + "..."
+			}
+
+			// Highlight the selected item
+			if i == m.selectedURLIndex {
+				sections = append(sections, m.styles.Selected.Render(prefix+displayURL))
+			} else {
+				sections = append(sections, m.styles.Normal.Render(prefix+displayURL))
+			}
+		}
+	}
+
+	sections = append(sections, "")
+	sections = append(sections, m.styles.Help.Render("Enter/1-9: Open URL  j/k: Navigate  Esc: Cancel"))
 
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
