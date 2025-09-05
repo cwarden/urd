@@ -13,10 +13,11 @@ import (
 )
 
 var (
-	cfgFile string
-	useP2   bool
-	p2File  string
-	cfg     *config.Config
+	cfgFile     string
+	remindFiles []string
+	useP2       bool
+	p2File      string
+	cfg         *config.Config
 )
 
 var rootCmd = &cobra.Command{
@@ -34,6 +35,7 @@ func Execute() error {
 func init() {
 	cobra.OnInitialize(initConfig)
 
+	rootCmd.PersistentFlags().StringSliceVarP(&remindFiles, "file", "f", []string{}, "Remind file(s) to use (can be specified multiple times)")
 	rootCmd.PersistentFlags().BoolVar(&useP2, "p2", false, "Include p2 tasks as calendar events")
 	rootCmd.PersistentFlags().StringVar(&p2File, "p2-file", "tasks.rec", "Path to p2 tasks file")
 }
@@ -54,7 +56,15 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	// Always start with remind client
 	remindClient := remind.NewClient()
 	remindClient.RemindPath = cfg.RemindCommand
-	remindClient.SetFiles(cfg.RemindFiles)
+
+	// Use command-line specified files if provided, otherwise use config files
+	if len(remindFiles) > 0 {
+		remindClient.SetFiles(remindFiles)
+		// Also update the config so the UI has the correct files for editing
+		cfg.RemindFiles = remindFiles
+	} else {
+		remindClient.SetFiles(cfg.RemindFiles)
+	}
 
 	// Test remind connection (only for remind client, not the interface)
 	if err := remindClient.TestConnection(); err != nil {

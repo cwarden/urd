@@ -31,7 +31,13 @@ func runList(cmd *cobra.Command, args []string) error {
 	// Always start with remind client
 	remindClient := remind.NewClient()
 	remindClient.RemindPath = cfg.RemindCommand
-	remindClient.SetFiles(cfg.RemindFiles)
+
+	// Use command-line specified files if provided, otherwise use config files
+	if len(remindFiles) > 0 {
+		remindClient.SetFiles(remindFiles)
+	} else {
+		remindClient.SetFiles(cfg.RemindFiles)
+	}
 
 	// Test remind connection
 	if err := remindClient.TestConnection(); err != nil {
