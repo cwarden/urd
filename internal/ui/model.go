@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -86,6 +87,9 @@ type Model struct {
 
 	// Activity tracking
 	lastKeyInput time.Time // last time a key was pressed
+
+	// Error state
+	syntaxError error // Persistent syntax error from remind files
 
 	// Styles
 	styles Styles
@@ -1977,6 +1981,16 @@ func (m *Model) loadEvents() {
 	events, err := m.source.GetEvents(start, end)
 	if err == nil {
 		m.events = events
+		m.syntaxError = nil // Clear any previous syntax error
+	} else {
+		// Check if this is a syntax error
+		var syntaxErr *remind.RemindSyntaxError
+		if errors.As(err, &syntaxErr) {
+			m.syntaxError = err // Store syntax error for persistent display
+		} else {
+			// For other errors, just show a temporary message
+			m.showMessage(fmt.Sprintf("Error loading events: %v", err))
+		}
 	}
 }
 
@@ -1989,9 +2003,16 @@ func (m *Model) loadEventsForSchedule() {
 	if err == nil {
 		m.events = events
 		m.eventsLoadedFor = m.selectedDate // Track when we last loaded events
+		m.syntaxError = nil                // Clear any previous syntax error
 	} else {
-		// Show error message for debugging
-		m.showMessage(fmt.Sprintf("Error loading events: %v", err))
+		// Check if this is a syntax error
+		var syntaxErr *remind.RemindSyntaxError
+		if errors.As(err, &syntaxErr) {
+			m.syntaxError = err // Store syntax error for persistent display
+		} else {
+			// For other errors, just show a temporary message
+			m.showMessage(fmt.Sprintf("Error loading events: %v", err))
+		}
 	}
 }
 

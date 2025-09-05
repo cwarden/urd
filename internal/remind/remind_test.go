@@ -330,3 +330,148 @@ func slicesEqual(a, b []string) bool {
 	}
 	return true
 }
+
+func TestParseRemindError(t *testing.T) {
+	client := NewClient()
+
+	tests := []struct {
+		name         string
+		output       string
+		expectError  bool
+		expectedFile string
+		expectedLine int
+		expectedMsg  string
+	}{
+		{
+			name:         "undefined function error",
+			output:       "reminders.rem(6): Undefined function: `ack'",
+			expectError:  true,
+			expectedFile: "reminders.rem",
+			expectedLine: 6,
+			expectedMsg:  "Undefined function: `ack'",
+		},
+		{
+			name:         "expecting valid expression",
+			output:       "test.rem(10): Expecting valid expression",
+			expectError:  true,
+			expectedFile: "test.rem",
+			expectedLine: 10,
+			expectedMsg:  "Expecting valid expression",
+		},
+		{
+			name:         "parse error with path",
+			output:       "/home/user/.reminders(42): Parse error",
+			expectError:  true,
+			expectedFile: "/home/user/.reminders",
+			expectedLine: 42,
+			expectedMsg:  "Parse error",
+		},
+		{
+			name:         "multiple lines with error",
+			output:       "Some other output\nreminders.rem(3): Unknown keyword\nMore output",
+			expectError:  true,
+			expectedFile: "reminders.rem",
+			expectedLine: 3,
+			expectedMsg:  "Unknown keyword",
+		},
+		{
+			name:        "no error in output",
+			output:      "Regular remind output without errors",
+			expectError: false,
+		},
+		{
+			name:         "error keyword without proper format",
+			output:       "An error occurred but not in remind format",
+			expectError:  true,
+			expectedFile: "",
+			expectedLine: 0,
+			expectedMsg:  "An error occurred but not in remind format",
+		},
+		{
+			name:        "empty output",
+			output:      "",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := client.parseRemindError(tt.output)
+
+			if tt.expectError && err == nil {
+				t.Errorf("Expected error but got none")
+				return
+			}
+
+			if !tt.expectError && err != nil {
+				t.Errorf("Unexpected error: %v", err)
+				return
+			}
+
+			if tt.expectError && err != nil {
+				syntaxErr, ok := err.(*RemindSyntaxError)
+				if !ok {
+					t.Errorf("Expected RemindSyntaxError, got %T", err)
+					return
+				}
+
+				if syntaxErr.File != tt.expectedFile {
+					t.Errorf("File mismatch: got %q, want %q", syntaxErr.File, tt.expectedFile)
+				}
+
+				if syntaxErr.Line != tt.expectedLine {
+					t.Errorf("Line mismatch: got %d, want %d", syntaxErr.Line, tt.expectedLine)
+				}
+
+				if syntaxErr.Message != tt.expectedMsg {
+					t.Errorf("Message mismatch: got %q, want %q", syntaxErr.Message, tt.expectedMsg)
+				}
+			}
+		})
+	}
+}
+
+func TestRemindSyntaxErrorString(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      RemindSyntaxError
+		expected string
+	}{
+		{
+			name: "with file and line",
+			err: RemindSyntaxError{
+				File:    "test.rem",
+				Line:    42,
+				Message: "Undefined function",
+			},
+			expected: "test.rem:42: Undefined function",
+		},
+		{
+			name: "without line number",
+			err: RemindSyntaxError{
+				File:    "test.rem",
+				Line:    0,
+				Message: "General error",
+			},
+			expected: "test.rem: General error",
+		},
+		{
+			name: "without file",
+			err: RemindSyntaxError{
+				File:    "",
+				Line:    0,
+				Message: "Unknown error",
+			},
+			expected: ": Unknown error",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.err.Error()
+			if got != tt.expected {
+				t.Errorf("Error string mismatch: got %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}

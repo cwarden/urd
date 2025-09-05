@@ -12,6 +12,20 @@ import (
 	"time"
 )
 
+// RemindSyntaxError represents a syntax error in a remind file
+type RemindSyntaxError struct {
+	File    string
+	Line    int
+	Message string
+}
+
+func (e *RemindSyntaxError) Error() string {
+	if e.Line > 0 {
+		return fmt.Sprintf("%s:%d: %s", e.File, e.Line, e.Message)
+	}
+	return fmt.Sprintf("%s: %s", e.File, e.Message)
+}
+
 type Client struct {
 	RemindPath string
 	Files      []string
@@ -118,13 +132,27 @@ func (c *Client) getEventsForMonth(monthStart time.Time) ([]Event, error) {
 		fmt.Sprintf("%d", monthStart.Year()))
 
 	cmd := exec.Command(c.RemindPath, args...)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Check if we got JSON output despite error
-		if len(output) == 0 {
-			return nil, fmt.Errorf("remind command failed: %w", err)
+
+	// Capture stdout and stderr separately
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	// Check for syntax errors in stderr first
+	if stderr.Len() > 0 {
+		if syntaxErr := c.parseRemindError(stderr.String()); syntaxErr != nil {
+			return nil, syntaxErr
 		}
 	}
+
+	// If command failed and no stdout, return error
+	if err != nil && stdout.Len() == 0 {
+		return nil, fmt.Errorf("remind command failed: %w", err)
+	}
+
+	output := []byte(stdout.String())
 
 	// Parse JSON output
 	months, parseErr := ParseRemindJSON(output)
@@ -607,6 +635,54 @@ func (c *Client) AddTimedEventFromTemplate(template, dateStr, timeStr string) (i
 	}
 
 	return lineNumber, nil
+}
+
+// parseRemindError parses remind error output to extract file, line number, and error message
+func (c *Client) parseRemindError(output string) error {
+	// Remind error format examples:
+	// reminders.rem(6): Expecting valid expression
+	// reminders.rem(6): ack: Unknown function
+	// /path/to/file.rem(10): Parse error
+
+	// Try to match error pattern: filename(line): message
+	errorRe := regexp.MustCompile(`^(.+?)\((\d+)\):\s*(.+)$`)
+
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		if matches := errorRe.FindStringSubmatch(line); matches != nil {
+			lineNum, _ := strconv.Atoi(matches[2])
+			return &RemindSyntaxError{
+				File:    matches[1],
+				Line:    lineNum,
+				Message: matches[3],
+			}
+		}
+
+		// If we can't parse the error format, but it looks like an error message
+		// Check for common remind error keywords at the start of the line
+		lowerLine := strings.ToLower(line)
+		if strings.HasPrefix(lowerLine, "error:") || strings.HasPrefix(lowerLine, "error ") ||
+			strings.HasPrefix(lowerLine, "an error") || strings.HasPrefix(lowerLine, "parse error") ||
+			strings.HasPrefix(lowerLine, "syntax error") || strings.HasPrefix(lowerLine, "expecting ") ||
+			strings.HasPrefix(lowerLine, "unknown ") || strings.HasPrefix(lowerLine, "undefined ") ||
+			strings.HasPrefix(lowerLine, "invalid ") || strings.Contains(lowerLine, "error occurred") ||
+			strings.Contains(lowerLine, ": error") || strings.Contains(lowerLine, ": expecting") ||
+			strings.Contains(lowerLine, ": unknown") || strings.Contains(lowerLine, ": undefined") {
+			// Return a generic syntax error with the full line as the message
+			return &RemindSyntaxError{
+				File:    "",
+				Line:    0,
+				Message: line,
+			}
+		}
+	}
+
+	return nil
 }
 
 func (c *Client) TestConnection() error {

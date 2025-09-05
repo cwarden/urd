@@ -641,9 +641,22 @@ func (m *Model) createStatusBarLayers(visibleSlots int) []*lipgloss.Layer {
 		Z(2000) // High Z to ensure status bar is on top
 	layers = append(layers, timeLayer)
 
-	// Second line: Help shortcuts (or message if present)
+	// Second line: Error message (highest priority), then regular message, then help shortcuts
 	var helpText string
-	if m.message != "" {
+	if m.syntaxError != nil {
+		// Display syntax error prominently with red background
+		errorStyle := lipgloss.NewStyle().
+			Background(lipgloss.Color("196")). // Red background
+			Foreground(lipgloss.Color("231")). // White text
+			Bold(true).
+			Width(m.width)
+		errorMsg := fmt.Sprintf(" ERROR: %v", m.syntaxError)
+		helpLayer := lipgloss.NewLayer(errorStyle.Render(errorMsg)).
+			X(0).
+			Y(visibleSlots + 1).
+			Z(2000)
+		layers = append(layers, helpLayer)
+	} else if m.message != "" {
 		helpText = m.message
 		helpLayer := lipgloss.NewLayer(m.styles.Message.Render(helpText)).
 			X(0).

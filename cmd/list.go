@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/cwarden/urd/internal/remind"
@@ -60,7 +61,8 @@ func runList(cmd *cobra.Command, args []string) error {
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
 	events, err := source.GetEvents(today, today)
 	if err != nil {
-		return fmt.Errorf("error getting events: %w", err)
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
 	// Display events
