@@ -1,4 +1,4 @@
-VERSION=$(shell git describe --abbrev=0 --always)
+VERSION=$(shell git describe --exact-match --tags 2>/dev/null || git describe --abbrev=0 --always)
 LDFLAGS = -ldflags "-X github.com/cwarden/urd/cmd.version=${VERSION}"
 EXECUTABLE=urd
 WINDOWS=$(EXECUTABLE)_windows_amd64.exe
