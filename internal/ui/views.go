@@ -122,7 +122,7 @@ func (m *Model) viewHelp() string {
 	help = append(help, m.styles.Normal.Render("Actions:"))
 
 	// Basic actions
-	basicActions := []string{"edit", "edit_any", "quick_add", "new_timed", "new_untimed", "refresh"}
+	basicActions := []string{"edit", "edit_any", "quick_add", "new_timed", "new_untimed", "open_url", "refresh"}
 	addBoundActions(basicActions)
 
 	// Templates section

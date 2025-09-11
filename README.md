@@ -10,6 +10,7 @@ A terminal calendar application inspired by wyrd, providing a TUI frontend for t
 - **Live File Watching**: Auto-refresh when remind files change
 - **Search & Navigation**: Search for events and quickly navigate to specific dates with goto
 - **Cut/Copy/Paste**: Full clipboard support for event management
+- **URL Support**: Open URLs embedded in reminders directly from the TUI
 - **Customizable**: Extensive configuration via urdrc file
 - **Priority Support**: Mark events with priority levels (!, !!, !!!)
 - **Tag Support**: Organize events with @tags
@@ -77,6 +78,7 @@ Key bindings are fully customizable via the urdrc configuration file. Configured
 - `X` - Cut/delete event to clipboard
 - `y` - Copy event to clipboard
 - `p` - Paste event from clipboard
+- `Ctrl+B` - Open URL from reminder
 - `Ctrl+L` - Refresh
 - `?` - Toggle help
 - `Q` - Quit
