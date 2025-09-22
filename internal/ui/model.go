@@ -1144,7 +1144,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			newTime := time.Date(selectedDate.Year(), selectedDate.Month(), selectedDate.Day(),
 				hour, minute, 0, 0, selectedDate.Location())
 			newEvent.Time = &newTime
-			// Keep duration if original event had one, otherwise leave nil
+			// Keep duration if original event had one
+			if m.clipboardEvent.Duration != nil {
+				duration := *m.clipboardEvent.Duration
+				newEvent.Duration = &duration
+			}
 		}
 
 		// Add the event to the remind file
@@ -1217,7 +1221,11 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			newTime := time.Date(selectedDate.Year(), selectedDate.Month(), selectedDate.Day(),
 				hour, minute, 0, 0, selectedDate.Location())
 			newEvent.Time = &newTime
-			// Keep duration if original event had one, otherwise leave nil
+			// Keep duration if original event had one
+			if m.clipboardEvent.Duration != nil {
+				duration := *m.clipboardEvent.Duration
+				newEvent.Duration = &duration
+			}
 		}
 
 		// Add the event to the remind file

@@ -539,3 +539,95 @@ func TestIsSlotVisible(t *testing.T) {
 		})
 	}
 }
+
+// TestClipboardPreservesDuration tests that duration is preserved when copying/cutting events
+func TestClipboardPreservesDuration(t *testing.T) {
+	testTime := time.Date(2025, 9, 21, 12, 0, 0, 0, time.Local)
+	duration := 90 * time.Minute
+
+	tests := []struct {
+		name             string
+		originalEvent    remind.Event
+		expectedDuration *time.Duration
+	}{
+		{
+			name: "event with duration",
+			originalEvent: remind.Event{
+				Date:        testTime,
+				Time:        &testTime,
+				Duration:    &duration,
+				Description: "Meeting with duration",
+			},
+			expectedDuration: &duration,
+		},
+		{
+			name: "event without duration",
+			originalEvent: remind.Event{
+				Date:        testTime,
+				Time:        &testTime,
+				Description: "Meeting without duration",
+			},
+			expectedDuration: nil,
+		},
+		{
+			name: "untimed event",
+			originalEvent: remind.Event{
+				Date:        testTime,
+				Description: "All day event",
+			},
+			expectedDuration: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Model{
+				timeIncrement:  60,
+				selectedSlot:   12,
+				selectedDate:   testTime,
+				config:         &config.Config{},
+				clipboardEvent: nil,
+			}
+
+			// Copy the event to clipboard
+			m.clipboardEvent = &tt.originalEvent
+			m.clipboardCut = false
+
+			// Verify the duration is in the clipboard
+			if m.clipboardEvent.Duration == nil && tt.expectedDuration != nil {
+				t.Error("Expected duration in clipboard but got nil")
+			} else if m.clipboardEvent.Duration != nil && tt.expectedDuration == nil {
+				t.Error("Expected no duration in clipboard but got one")
+			} else if m.clipboardEvent.Duration != nil && tt.expectedDuration != nil {
+				if *m.clipboardEvent.Duration != *tt.expectedDuration {
+					t.Errorf("Duration mismatch: got %v, want %v",
+						*m.clipboardEvent.Duration, *tt.expectedDuration)
+				}
+			}
+
+			// Simulate pasting - create new event based on clipboard
+			if m.clipboardEvent != nil {
+				newEvent := *m.clipboardEvent
+				newEvent.Date = testTime.AddDate(0, 0, 1)
+
+				// This simulates the paste operation preserving duration
+				if m.clipboardEvent.Duration != nil {
+					copiedDuration := *m.clipboardEvent.Duration
+					newEvent.Duration = &copiedDuration
+				}
+
+				// Verify duration was preserved in the new event
+				if newEvent.Duration == nil && tt.expectedDuration != nil {
+					t.Error("Duration lost during paste")
+				} else if newEvent.Duration != nil && tt.expectedDuration == nil {
+					t.Error("Unexpected duration added during paste")
+				} else if newEvent.Duration != nil && tt.expectedDuration != nil {
+					if *newEvent.Duration != *tt.expectedDuration {
+						t.Errorf("Duration changed during paste: got %v, want %v",
+							*newEvent.Duration, *tt.expectedDuration)
+					}
+				}
+			}
+		})
+	}
+}

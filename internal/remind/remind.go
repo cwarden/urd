@@ -918,7 +918,16 @@ func (c *Client) AddEventStruct(event Event) (int, error) {
 
 	if event.Time != nil {
 		timeStr := event.Time.Format("15:04")
-		remindLine = fmt.Sprintf("REM %s AT %s MSG %s\n", dateStr, timeStr, event.Description)
+		if event.Duration != nil {
+			// Format duration as hours:minutes
+			totalMin := int(event.Duration.Minutes())
+			hours := totalMin / 60
+			minutes := totalMin % 60
+			remindLine = fmt.Sprintf("REM %s AT %s DURATION %d:%.2d MSG %s\n",
+				dateStr, timeStr, hours, minutes, event.Description)
+		} else {
+			remindLine = fmt.Sprintf("REM %s AT %s MSG %s\n", dateStr, timeStr, event.Description)
+		}
 	} else {
 		remindLine = fmt.Sprintf("REM %s MSG %s\n", dateStr, event.Description)
 	}

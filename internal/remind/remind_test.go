@@ -1,6 +1,7 @@
 package remind
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -471,6 +472,95 @@ func TestRemindSyntaxErrorString(t *testing.T) {
 			got := tt.err.Error()
 			if got != tt.expected {
 				t.Errorf("Error string mismatch: got %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestAddEventStructWithDuration(t *testing.T) {
+	// Create a temporary file for testing
+	tmpFile := t.TempDir() + "/test.rem"
+
+	client := NewClient()
+	client.Files = []string{tmpFile}
+
+	tests := []struct {
+		name     string
+		event    Event
+		expected string
+	}{
+		{
+			name: "event with time and duration",
+			event: Event{
+				Date:        time.Date(2025, 9, 21, 0, 0, 0, 0, time.Local),
+				Time:        timePtr(time.Date(2025, 9, 21, 12, 0, 0, 0, time.Local)),
+				Duration:    durationPtr(90 * time.Minute),
+				Description: "Meeting with duration",
+			},
+			expected: "REM Sep 21 2025 AT 12:00 DURATION 1:30 MSG Meeting with duration\n",
+		},
+		{
+			name: "event with time but no duration",
+			event: Event{
+				Date:        time.Date(2025, 9, 21, 0, 0, 0, 0, time.Local),
+				Time:        timePtr(time.Date(2025, 9, 21, 14, 30, 0, 0, time.Local)),
+				Description: "Quick check-in",
+			},
+			expected: "REM Sep 21 2025 AT 14:30 MSG Quick check-in\n",
+		},
+		{
+			name: "untimed event",
+			event: Event{
+				Date:        time.Date(2025, 9, 22, 0, 0, 0, 0, time.Local),
+				Description: "All day event",
+			},
+			expected: "REM Sep 22 2025 MSG All day event\n",
+		},
+		{
+			name: "event with 2 hour duration",
+			event: Event{
+				Date:        time.Date(2025, 10, 1, 0, 0, 0, 0, time.Local),
+				Time:        timePtr(time.Date(2025, 10, 1, 9, 0, 0, 0, time.Local)),
+				Duration:    durationPtr(2 * time.Hour),
+				Description: "Workshop",
+			},
+			expected: "REM Oct 1 2025 AT 09:00 DURATION 2:00 MSG Workshop\n",
+		},
+		{
+			name: "event with 45 minute duration",
+			event: Event{
+				Date:        time.Date(2025, 10, 15, 0, 0, 0, 0, time.Local),
+				Time:        timePtr(time.Date(2025, 10, 15, 15, 15, 0, 0, time.Local)),
+				Duration:    durationPtr(45 * time.Minute),
+				Description: "Stand-up",
+			},
+			expected: "REM Oct 15 2025 AT 15:15 DURATION 0:45 MSG Stand-up\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear the file
+			_ = os.WriteFile(tmpFile, []byte(""), 0644)
+
+			// Add the event
+			lineNum, err := client.AddEventStruct(tt.event)
+			if err != nil {
+				t.Fatalf("AddEventStruct failed: %v", err)
+			}
+
+			if lineNum != 1 {
+				t.Errorf("Expected line number 1, got %d", lineNum)
+			}
+
+			// Read the file and check contents
+			content, err := os.ReadFile(tmpFile)
+			if err != nil {
+				t.Fatalf("Failed to read file: %v", err)
+			}
+
+			if string(content) != tt.expected {
+				t.Errorf("File content mismatch:\ngot:  %q\nwant: %q", string(content), tt.expected)
 			}
 		})
 	}
