@@ -87,7 +87,7 @@ func (m *Model) createTimeColumnLayers(slotsPerDay, visibleSlots int) []*lipglos
 			}
 			currentDate := m.selectedDate.AddDate(0, 0, dayOffset)
 			dateLine := currentDate.Format("─Mon Jan 02")
-			dateLayer := lipgloss.NewLayer(m.styles.Header.Render(dateLine)).X(0).Y(rowIndex).Z(0)
+			dateLayer := lipgloss.NewLayer(m.styles.Header.Render(dateLine)).X(0).Y(rowIndex).Z(1000)
 			layers = append(layers, dateLayer)
 			prevDay = dayOffset
 			rowIndex++
