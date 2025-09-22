@@ -3,6 +3,7 @@ package remind
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -63,10 +64,41 @@ func ConvertJSONToEvents(entries []RemindEntry, timezone *time.Location) []Event
 			continue
 		}
 
+		// Check if this is part of a multi-day event
+		var isMultiDayStart bool
+		var isMultiDayContinuation bool
+		if entry.EventStart != "" && entry.EventDuration != nil {
+			if startTime, err := time.ParseInLocation("2006-01-02T15:04", entry.EventStart, timezone); err == nil {
+				startDate := startTime.Format("2006-01-02")
+				if startDate == entry.Date {
+					// This is the starting day of a potentially multi-day event
+					isMultiDayStart = true
+				} else {
+					// This is a continuation day
+					isMultiDayContinuation = true
+				}
+			}
+		}
+
+		// Use the current date for the event
+		eventDate := date
+
+		// Extract description from Body field, removing time range if present
+		description := entry.Body
+		if strings.Contains(description, " ") {
+			// For multi-day events, Body contains time info like "3:00pm-1:00am+1 Description"
+			// Extract just the description part
+			parts := strings.Fields(description)
+			if len(parts) > 1 && strings.Contains(parts[0], ":") {
+				// First part is time, rest is description
+				description = strings.Join(parts[1:], " ")
+			}
+		}
+
 		event := Event{
 			ID:          fmt.Sprintf("evt-%s-%d", entry.Date, entry.LineNo),
-			Date:        date,
-			Description: entry.Body,
+			Date:        eventDate,
+			Description: description,
 			Filename:    entry.Filename,
 			LineNumber:  entry.LineNo,
 			Tags:        entry.Tags,
@@ -74,6 +106,7 @@ func ConvertJSONToEvents(entries []RemindEntry, timezone *time.Location) []Event
 
 		// Check if it's a timed event
 		if entry.Time != nil {
+			// Use the time from this entry
 			hours := *entry.Time / 60
 			minutes := *entry.Time % 60
 			eventTime := time.Date(date.Year(), date.Month(), date.Day(),
@@ -81,7 +114,12 @@ func ConvertJSONToEvents(entries []RemindEntry, timezone *time.Location) []Event
 			event.Time = &eventTime
 			event.Type = EventReminder
 
-			if entry.Duration != nil {
+			// For multi-day events, use EventDuration (total duration)
+			// For single-day events, use Duration
+			if isMultiDayStart && entry.EventDuration != nil {
+				duration := time.Duration(*entry.EventDuration) * time.Minute
+				event.Duration = &duration
+			} else if entry.Duration != nil {
 				duration := time.Duration(*entry.Duration) * time.Minute
 				event.Duration = &duration
 			}
@@ -104,7 +142,19 @@ func ConvertJSONToEvents(entries []RemindEntry, timezone *time.Location) []Event
 			event.Priority = PriorityNone
 		}
 
-		events = append(events, event)
+		// For multi-day events, handle the start vs continuation appropriately
+		if isMultiDayStart {
+			// This is the start of a multi-day event - use full duration from EventDuration
+			// The event will naturally extend into the next day due to its duration
+			events = append(events, event)
+		} else if isMultiDayContinuation {
+			// This is a continuation - skip it because the start event already covers it
+			// The start event's duration extends into this day
+			continue
+		} else {
+			// Regular single-day event
+			events = append(events, event)
+		}
 	}
 
 	return events

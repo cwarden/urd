@@ -245,12 +245,6 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 
 		eventSlot := dayDiff*slotsPerDay + localSlot
 
-		// Check if event is in visible range
-		visibleStart := eventSlot - m.topSlot
-		if visibleStart >= visibleSlots {
-			continue // Event is after visible area
-		}
-
 		// Calculate duration in slots
 		slotSpan := 1
 		if event.Duration != nil {
@@ -264,9 +258,23 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 			}
 		}
 
-		visibleEnd := visibleStart + slotSpan
+		// Calculate the absolute end slot
+		eventEndSlot := eventSlot + slotSpan
+
+		// Check if event is in visible range
+		// Event is visible if it starts before the visible area ends
+		// AND ends after the visible area starts
+		visibleStart := eventSlot - m.topSlot
+		visibleEnd := eventEndSlot - m.topSlot
+
+		// Skip if event is completely after visible area
+		if visibleStart >= visibleSlots {
+			continue
+		}
+
+		// Skip if event is completely before visible area
 		if visibleEnd <= 0 {
-			continue // Event is before visible area
+			continue
 		}
 
 		// Clip to visible area
@@ -286,7 +294,11 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 
 		// Convert slot indices to row indices (accounting for date separators)
 		startRow := m.slotToRowIndex(clippedStart, slotsPerDay)
-		spanRows := clippedSpan // Simplified: assume 1 slot = 1 row for now
+
+		// Calculate spanRows accounting for date separators
+		// We need to calculate the end row and subtract the start row
+		endRow := m.slotToRowIndex(clippedStart+clippedSpan-1, slotsPerDay)
+		spanRows := endRow - startRow + 1
 
 		// Find available column
 		column := 0

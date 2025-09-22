@@ -338,6 +338,7 @@ func (c *Client) parseRemindNextOutput(output string) ([]Event, error) {
 
 func (c *Client) parseRemindOutput(output string) ([]Event, error) {
 	var events []Event
+	eventMap := make(map[string]*Event) // Track events for merging
 	scanner := bufio.NewScanner(strings.NewReader(output))
 
 	// Regex for remind -s output format:
@@ -375,6 +376,8 @@ func (c *Client) parseRemindOutput(output string) ([]Event, error) {
 		// Parse remind -s format: duration start_time time_str description
 		// * * means untimed, * 540 means timed
 		idx := 0
+		durationMins := 0
+		timeRangeStr := ""
 
 		if parts[idx] == "*" {
 			idx++
@@ -388,12 +391,38 @@ func (c *Client) parseRemindOutput(output string) ([]Event, error) {
 
 				// Look for time string
 				if idx < len(parts) && strings.Contains(parts[idx], ":") {
-					t, err := time.Parse("15:04", parts[idx])
-					if err == nil {
-						eventTime := time.Date(date.Year(), date.Month(), date.Day(),
-							t.Hour(), t.Minute(), 0, 0, c.Timezone)
-						event.Time = &eventTime
-						event.Type = EventReminder
+					timeRangeStr = parts[idx]
+
+					// Parse the start time from the range
+					timeParts := strings.Split(timeRangeStr, "-")
+					if len(timeParts) > 0 {
+						// Handle both 24hr and am/pm formats
+						timeStr := timeParts[0]
+						timeStr = strings.TrimSuffix(timeStr, "am")
+						timeStr = strings.TrimSuffix(timeStr, "pm")
+
+						t, err := time.Parse("15:04", timeStr)
+						if err != nil {
+							// Try 3:04 format for am/pm times
+							t, err = time.Parse("3:04", timeStr)
+						}
+						if err == nil {
+							hour := t.Hour()
+							// Adjust for am/pm times
+							if strings.Contains(timeParts[0], "pm") && hour < 12 {
+								hour += 12
+							} else if strings.Contains(timeParts[0], "am") && hour == 12 {
+								// 12:00am is midnight
+								hour = 0
+							} else if hour == 12 && !strings.Contains(timeParts[0], "pm") && strings.Contains(timeRangeStr, "am") {
+								// "12:00" in "12:00-1:00am" means 12:00am (midnight)
+								hour = 0
+							}
+							eventTime := time.Date(date.Year(), date.Month(), date.Day(),
+								hour, t.Minute(), 0, 0, c.Timezone)
+							event.Time = &eventTime
+							event.Type = EventReminder
+						}
 					}
 					idx++
 				}
@@ -404,22 +433,59 @@ func (c *Client) parseRemindOutput(output string) ([]Event, error) {
 				}
 			}
 		} else {
-			// Has duration - skip it
-			idx++
-			if idx < len(parts) {
-				// Skip start time
-				idx++
+			// Has duration in minutes
+			if durMins, err := strconv.Atoi(parts[idx]); err == nil {
+				durationMins = durMins
+				duration := time.Duration(durationMins) * time.Minute
+				event.Duration = &duration
 			}
+			idx++
+
+			// Get start time in minutes
+			if idx < len(parts) {
+				idx++ // Skip start time
+			}
+
+			// Get time range string (e.g., "3:00pm-1:00am+1" or "12:00-1:00am")
 			if idx < len(parts) && strings.Contains(parts[idx], ":") {
-				t, err := time.Parse("15:04", parts[idx])
-				if err == nil {
-					eventTime := time.Date(date.Year(), date.Month(), date.Day(),
-						t.Hour(), t.Minute(), 0, 0, c.Timezone)
-					event.Time = &eventTime
-					event.Type = EventReminder
+				timeRangeStr = parts[idx]
+
+				// Check if this is a continuation (starts at midnight)
+
+				// Parse the start time from the range
+				timeParts := strings.Split(timeRangeStr, "-")
+				if len(timeParts) > 0 {
+					// Handle both 24hr and am/pm formats
+					timeStr := timeParts[0]
+					timeStr = strings.TrimSuffix(timeStr, "am")
+					timeStr = strings.TrimSuffix(timeStr, "pm")
+
+					t, err := time.Parse("15:04", timeStr)
+					if err != nil {
+						// Try 3:04 format for am/pm times
+						t, err = time.Parse("3:04", timeStr)
+					}
+					if err == nil {
+						hour := t.Hour()
+						// Adjust for am/pm times
+						if strings.Contains(timeParts[0], "pm") && hour < 12 {
+							hour += 12
+						} else if strings.Contains(timeParts[0], "am") && hour == 12 {
+							// 12:00am is midnight
+							hour = 0
+						} else if hour == 12 && !strings.Contains(timeParts[0], "pm") && strings.Contains(timeRangeStr, "am") {
+							// "12:00" in "12:00-1:00am" means 12:00am (midnight)
+							hour = 0
+						}
+						eventTime := time.Date(date.Year(), date.Month(), date.Day(),
+							hour, t.Minute(), 0, 0, c.Timezone)
+						event.Time = &eventTime
+						event.Type = EventReminder
+					}
 				}
 				idx++
 			}
+
 			// Rest is description
 			if idx < len(parts) {
 				event.Description = strings.Join(parts[idx:], " ")
@@ -428,8 +494,34 @@ func (c *Client) parseRemindOutput(output string) ([]Event, error) {
 
 		// Parse priority and tags from description
 		event.Description, event.Priority, event.Tags = c.parseEventDetails(event.Description)
-		event.ID = c.generateEventID(event)
 
+		// Check if this event is a continuation of a multi-day event
+		// For text format, remind gives us the full duration in the first entry
+		if event.Time != nil && event.Description != "" {
+			baseKey := event.Description
+
+			// Check if we have a previous event with the same description
+			if existingEvent, found := eventMap[baseKey]; found && existingEvent.Duration != nil {
+				// Check if this might be a continuation
+				existingEnd := existingEvent.Time.Add(*existingEvent.Duration)
+
+				// If this event starts at midnight on the day after the existing event starts
+				// and the existing event extends past midnight, this is a continuation
+				if event.Time.Hour() == 0 && event.Time.Minute() == 0 {
+					// Check if the existing event extends into this day
+					if existingEnd.After(*event.Time) || existingEnd.Equal(*event.Time) {
+						// This is a continuation - skip it
+						// The first entry already has the full duration
+						continue
+					}
+				}
+			}
+
+			// Store this event for checking against future events
+			eventMap[baseKey] = &event
+		}
+
+		event.ID = c.generateEventID(event)
 		events = append(events, event)
 	}
 

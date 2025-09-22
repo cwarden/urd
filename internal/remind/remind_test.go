@@ -477,6 +477,135 @@ func TestRemindSyntaxErrorString(t *testing.T) {
 	}
 }
 
+func TestParseMultiDayEvent(t *testing.T) {
+	client := NewClient()
+
+	// Test a 10-hour event that spans midnight
+	// remind outputs it as two separate entries
+	output := `2025/09/21 * * 600 900 3:00pm-1:00am+1 Multi-day meeting
+2025/09/22 * * 60 0 12:00-1:00am Multi-day meeting`
+
+	events, err := client.parseRemindOutput(output)
+	if err != nil {
+		t.Fatalf("Parse failed: %v", err)
+	}
+
+	// Should only get 1 event (the continuation should be merged)
+	if len(events) != 1 {
+		t.Errorf("Expected 1 merged event, got %d events", len(events))
+		for i, e := range events {
+			durStr := "nil"
+			if e.Duration != nil {
+				durStr = e.Duration.String()
+			}
+			timeStr := "nil"
+			if e.Time != nil {
+				timeStr = e.Time.Format("15:04")
+			}
+			t.Logf("Event %d: %s on %s at %s, duration: %s",
+				i+1, e.Description, e.Date.Format("2006-01-02"), timeStr, durStr)
+		}
+	}
+
+	if len(events) > 0 {
+		event := events[0]
+		// Check the event details
+		if event.Description != "Multi-day meeting" {
+			t.Errorf("Wrong description: %q", event.Description)
+		}
+
+		// Should start at 3pm on Sep 21
+		if event.Time == nil {
+			t.Error("Event should have a time")
+		} else if event.Time.Hour() != 15 || event.Time.Minute() != 0 {
+			t.Errorf("Wrong start time: %v", event.Time)
+		}
+
+		// Should have 10 hours total duration (600 + 60 minutes)
+		if event.Duration == nil {
+			t.Error("Event should have duration")
+		} else if event.Duration.Hours() != 10 {
+			t.Errorf("Wrong duration: got %v, want 10 hours", event.Duration)
+		}
+	}
+}
+
+func TestConvertJSONMultiDayEvent(t *testing.T) {
+	// Test JSON entries for a 10-hour event split across two days
+	entries := []RemindEntry{
+		{
+			Date:          "2025-09-21",
+			Filename:      "/tmp/test.rem",
+			LineNo:        1,
+			Duration:      intPtr(540), // 9 hours for day 1 (15:00 to 00:00)
+			Time:          intPtr(900), // 15:00
+			EventDuration: intPtr(600), // Total event duration (10 hours)
+			EventStart:    "2025-09-21T15:00",
+			Priority:      5000,
+			RawBody:       "Multi-day meeting",
+			Body:          "3:00pm-1:00am+1 Multi-day meeting",
+		},
+		{
+			Date:          "2025-09-22",
+			Filename:      "/tmp/test.rem",
+			LineNo:        1,
+			Duration:      intPtr(60),  // 1 hour for day 2 (00:00 to 01:00)
+			Time:          intPtr(0),   // 00:00
+			EventDuration: intPtr(600), // Total event duration (10 hours)
+			EventStart:    "2025-09-21T15:00",
+			Priority:      5000,
+			RawBody:       "Multi-day meeting",
+			Body:          "12:00-1:00am Multi-day meeting",
+		},
+	}
+
+	events := ConvertJSONToEvents(entries, time.Local)
+
+	// Should only get 1 event (the continuation should be skipped)
+	if len(events) != 1 {
+		t.Errorf("Expected 1 event, got %d events", len(events))
+		for i, e := range events {
+			durStr := "nil"
+			if e.Duration != nil {
+				durStr = e.Duration.String()
+			}
+			timeStr := "nil"
+			if e.Time != nil {
+				timeStr = e.Time.Format("15:04")
+			}
+			t.Logf("Event %d: %s on %s at %s, duration: %s",
+				i+1, e.Description, e.Date.Format("2006-01-02"), timeStr, durStr)
+		}
+	}
+
+	if len(events) > 0 {
+		event := events[0]
+		// Check the event details - should extract description from Body
+		if !strings.Contains(event.Description, "Multi-day meeting") {
+			t.Errorf("Wrong description: %q", event.Description)
+		}
+
+		// Should start at 3pm on Sep 21
+		if event.Time == nil {
+			t.Error("Event should have a time")
+		} else if event.Time.Hour() != 15 || event.Time.Minute() != 0 {
+			t.Errorf("Wrong start time: %v", event.Time)
+		}
+
+		// Should have 10 hours total duration (from EventDuration)
+		if event.Duration == nil {
+			t.Error("Event should have duration")
+		} else if event.Duration.Hours() != 10 {
+			t.Errorf("Wrong duration: got %v, want 10 hours", event.Duration)
+		}
+	}
+}
+
+// Helper function for tests
+func intPtr(i int) *int {
+	return &i
+}
+
 func TestAddEventStructWithDuration(t *testing.T) {
 	// Create a temporary file for testing
 	tmpFile := t.TempDir() + "/test.rem"
