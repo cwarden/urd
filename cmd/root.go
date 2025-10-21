@@ -15,8 +15,6 @@ import (
 var (
 	cfgFile     string
 	remindFiles []string
-	useP2       bool
-	p2File      string
 	cfg         *config.Config
 )
 
@@ -24,7 +22,7 @@ var rootCmd = &cobra.Command{
 	Use:   "urd",
 	Short: "A terminal calendar application for the remind calendar system",
 	Long: `Urd is a terminal calendar application providing a TUI frontend for
-the remind calendar system (and the forthcoming p2 project management tool).`,
+the remind calendar system.`,
 	RunE: runTUI,
 }
 
@@ -36,8 +34,7 @@ func init() {
 	cobra.OnInitialize(initConfig)
 
 	rootCmd.PersistentFlags().StringSliceVarP(&remindFiles, "file", "f", []string{}, "Remind file(s) to use (can be specified multiple times)")
-	rootCmd.PersistentFlags().BoolVar(&useP2, "p2", false, "Include p2 tasks as calendar events")
-	rootCmd.PersistentFlags().StringVar(&p2File, "p2-file", "tasks.rec", "Path to p2 tasks file")
+	registerP2Flags(rootCmd)
 }
 
 func initConfig() {
@@ -72,15 +69,9 @@ func runTUI(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Please ensure 'remind' is installed and in your PATH\n")
 	}
 
-	// If p2 is requested, create a composite source
-	if useP2 {
-		p2Client := remind.NewP2Client()
-		p2Client.SetFiles([]string{p2File})
-		// Create composite source with both remind and p2
-		source = remind.NewCompositeSource(remindClient, p2Client)
-	} else {
-		// Use remind client alone
-		source = remindClient
+	source, err := buildReminderSource(remindClient)
+	if err != nil {
+		return err
 	}
 
 	// Start TUI

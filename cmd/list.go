@@ -26,9 +26,6 @@ func runList(cmd *cobra.Command, args []string) error {
 		initConfig()
 	}
 
-	// Initialize reminder source(s)
-	var source remind.ReminderSource
-
 	// Always start with remind client
 	remindClient := remind.NewClient()
 	remindClient.RemindPath = cfg.RemindCommand
@@ -45,15 +42,9 @@ func runList(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("remind connection failed: %w", err)
 	}
 
-	// If p2 is requested, create a composite source
-	if useP2 {
-		p2Client := remind.NewP2Client()
-		p2Client.SetFiles([]string{p2File})
-		// Create composite source with both remind and p2
-		source = remind.NewCompositeSource(remindClient, p2Client)
-	} else {
-		// Use remind client alone
-		source = remindClient
+	source, err := buildReminderSource(remindClient)
+	if err != nil {
+		return err
 	}
 
 	// Get today's events - normalize to midnight for date comparison
