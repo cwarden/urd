@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/lipgloss/v2"
 	"github.com/cwarden/urd/internal/remind"
+	"github.com/muesli/reflow/wordwrap"
 )
 
 // renderCanvasView renders the entire screen using a lipgloss Canvas
@@ -448,13 +449,39 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 			eventSlot := m.findEventSlot(pos.Event, slotsPerDay, baseDate)
 			visibleEventStart := eventSlot - m.topSlot
 			if visibleEventStart >= 0 {
-				text = pos.Event.Description
+				fullText := pos.Event.Description
 				if m.showEventIDs {
-					text = fmt.Sprintf("[%s] %s", pos.Event.ID, text)
+					fullText = fmt.Sprintf("[%s] %s", pos.Event.ID, fullText)
 				}
-				// Only truncate if text is longer than available width
-				if len(text) > eventWidth {
-					text = text[:eventWidth-3] + "..."
+
+				// Wrap text across the available rows for multi-slot events
+				if pos.SpanRows > 1 {
+					// Use wordwrap to wrap at whitespace boundaries
+					wrapped := wordwrap.String(fullText, eventWidth)
+					lines := strings.Split(wrapped, "\n")
+
+					// Take up to SpanRows lines
+					if len(lines) <= pos.SpanRows {
+						// All text fits
+						text = strings.Join(lines, "\n")
+					} else {
+						// Text doesn't fit, truncate and add ellipsis
+						displayLines := lines[:pos.SpanRows]
+						// Add ellipsis to the last line
+						lastLine := displayLines[pos.SpanRows-1]
+						if len(lastLine) > eventWidth-3 {
+							lastLine = lastLine[:eventWidth-3]
+						}
+						displayLines[pos.SpanRows-1] = lastLine + "..."
+						text = strings.Join(displayLines, "\n")
+					}
+				} else {
+					// Single row - just truncate if needed
+					if len(fullText) > eventWidth {
+						text = fullText[:eventWidth-3] + "..."
+					} else {
+						text = fullText
+					}
 				}
 			}
 		}
