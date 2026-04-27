@@ -38,6 +38,23 @@ type RemindEntry struct {
 	PassThru      string   `json:"passthru,omitempty"`
 }
 
+// extractSubject returns the text between the first pair of %" markers in
+// body. Remind uses %"..."%" to delimit a reminder's subject from surrounding
+// context; remind's JSON `body` field preserves these markers verbatim, so we
+// strip them here for display.
+func extractSubject(body string) string {
+	start := strings.Index(body, `%"`)
+	if start < 0 {
+		return body
+	}
+	rest := body[start+2:]
+	end := strings.Index(rest, `%"`)
+	if end < 0 {
+		return body
+	}
+	return rest[:end]
+}
+
 // ParseRemindJSON parses the JSON output from remind
 func ParseRemindJSON(jsonData []byte) ([]RemindJSON, error) {
 	var months []RemindJSON
@@ -84,8 +101,8 @@ func ConvertJSONToEvents(entries []RemindEntry, timezone *time.Location) []Event
 		eventDate := date
 
 		// Extract description from Body field, removing time range if present
-		description := entry.Body
-		if strings.Contains(description, " ") {
+		description := extractSubject(entry.Body)
+		if description == entry.Body && strings.Contains(description, " ") {
 			// For multi-day events, Body contains time info like "3:00pm-1:00am+1 Description"
 			// Extract just the description part
 			parts := strings.Fields(description)
