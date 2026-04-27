@@ -1732,7 +1732,7 @@ func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea
 		}
 		return m, nil
 
-	case "entry_complete":
+	case "entry_complete", "edit":
 		// Select the current event for clipboard operation
 		if m.selectedEventIndex < len(m.eventChoices) {
 			event := m.eventChoices[m.selectedEventIndex]
@@ -1809,6 +1809,15 @@ func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea
 			m.clipboardOperation = ""
 			return m, nil
 		}
+	}
+
+	switch key {
+	case "<esc>", "q":
+		m.mode = ViewHourly
+		m.eventChoices = nil
+		m.selectedEventIndex = 0
+		m.clipboardOperation = ""
+		return m, nil
 	}
 
 	return m, nil
