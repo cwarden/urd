@@ -8,7 +8,7 @@ import (
 
 	"github.com/cwarden/urd/internal/remind"
 
-	"github.com/charmbracelet/lipgloss/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/muesli/reflow/wordwrap"
 )
 

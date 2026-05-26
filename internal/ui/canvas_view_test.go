@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/charmbracelet/lipgloss/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/cwarden/urd/internal/config"
 	"github.com/cwarden/urd/internal/remind"
 )

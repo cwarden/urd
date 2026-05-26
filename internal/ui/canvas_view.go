@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/charmbracelet/lipgloss/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/cwarden/urd/internal/remind"
 	"github.com/muesli/reflow/wordwrap"
 )
@@ -57,8 +57,8 @@ func (m *Model) renderCanvasView() string {
 	layers = append(layers, statusLayers...)
 
 	// Render the canvas
-	canvas := lipgloss.NewCanvas(layers...)
-	canvasOutput := canvas.Render()
+	compositor := lipgloss.NewCompositor(layers...)
+	canvasOutput := compositor.Render()
 
 	// Return the Canvas output
 	return canvasOutput

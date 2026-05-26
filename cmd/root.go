@@ -9,7 +9,7 @@ import (
 	"github.com/cwarden/urd/internal/ui"
 	"github.com/spf13/cobra"
 
-	tea "github.com/charmbracelet/bubbletea/v2"
+	tea "charm.land/bubbletea/v2"
 )
 
 var (
@@ -76,7 +76,7 @@ func runTUI(cmd *cobra.Command, args []string) error {
 
 	// Start TUI
 	model := ui.NewModelWithRemind(cfg, source, remindClient)
-	p := tea.NewProgram(model, tea.WithAltScreen())
+	p := tea.NewProgram(model)
 
 	if _, err := p.Run(); err != nil {
 		return fmt.Errorf("error running program: %w", err)

@@ -14,8 +14,8 @@ import (
 	"github.com/cwarden/urd/internal/parser"
 	"github.com/cwarden/urd/internal/remind"
 
-	tea "github.com/charmbracelet/bubbletea/v2"
-	"github.com/charmbracelet/lipgloss/v2"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 )
 
 type ViewMode int
@@ -179,7 +179,6 @@ func DefaultStyles() Styles {
 
 func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
-		tea.EnterAltScreen,
 		m.tickCmd(),
 		m.timeUpdateCmd(),
 	)
@@ -231,31 +230,36 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *Model) View() string {
+func (m *Model) View() tea.View {
+	var content string
 	if m.width == 0 || m.height == 0 {
-		return "Loading..."
+		content = "Loading..."
+	} else {
+		switch m.mode {
+		case ViewHourly:
+			content = m.renderCanvasView()
+		case ViewHelp:
+			content = m.viewHelp()
+		case ViewEventEditor:
+			content = m.viewEventEditor()
+		case ViewEventSelector:
+			content = m.viewEventSelector()
+		case ViewGotoDate:
+			content = m.viewGotoDate()
+		case ViewSearch:
+			content = m.viewSearch()
+		case ViewClipboardSelector:
+			content = m.viewClipboardSelector()
+		case ViewURLSelector:
+			content = m.viewURLSelector()
+		default:
+			panic("unhandled mode")
+		}
 	}
 
-	switch m.mode {
-	case ViewHourly:
-		return m.renderCanvasView()
-	case ViewHelp:
-		return m.viewHelp()
-	case ViewEventEditor:
-		return m.viewEventEditor()
-	case ViewEventSelector:
-		return m.viewEventSelector()
-	case ViewGotoDate:
-		return m.viewGotoDate()
-	case ViewSearch:
-		return m.viewSearch()
-	case ViewClipboardSelector:
-		return m.viewClipboardSelector()
-	case ViewURLSelector:
-		return m.viewURLSelector()
-	default:
-		panic("unhandled mode")
-	}
+	v := tea.NewView(content)
+	v.AltScreen = true
+	return v
 }
 
 func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
