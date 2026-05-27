@@ -606,6 +606,64 @@ func intPtr(i int) *int {
 	return &i
 }
 
+func TestConvertJSONStripsBodyMarkers(t *testing.T) {
+	entries := []RemindEntry{
+		{
+			Date:     "2025-09-21",
+			Filename: "/tmp/test.rem",
+			LineNo:   1,
+			Time:     intPtr(540),
+			Priority: 5000,
+			RawBody:  `%"Check restic%"%`,
+			Body:     `9:00am %"Check restic%"`,
+		},
+		{
+			Date:     "2025-09-21",
+			Filename: "/tmp/test.rem",
+			LineNo:   2,
+			Priority: 5000,
+			RawBody:  `%"Renew passport online%"%`,
+			Body:     `%"Renew passport online%"`,
+		},
+		{
+			Date:     "2025-09-21",
+			Filename: "/tmp/test.rem",
+			LineNo:   3,
+			Time:     intPtr(1140),
+			Priority: 5000,
+			RawBody:  `%"Record Time in Zeph: Off work%" [t()]%`,
+			Body:     `7:00pm %"Record Time in Zeph: Off work%" today at 7:00pm`,
+		},
+		{
+			Date:     "2025-09-21",
+			Filename: "/tmp/test.rem",
+			LineNo:   4,
+			Time:     intPtr(1080),
+			Priority: 5000,
+			RawBody:  `%"Dinner%" [t()]%`,
+			Body:     `6:00pm %"Dinner%" today at 6:00pm`,
+		},
+	}
+
+	events := ConvertJSONToEvents(entries, time.Local)
+
+	if len(events) != 4 {
+		t.Fatalf("Expected 4 events, got %d", len(events))
+	}
+
+	expected := []string{
+		"Check restic",
+		"Renew passport online",
+		"Record Time in Zeph: Off work",
+		"Dinner",
+	}
+	for i, want := range expected {
+		if events[i].Description != want {
+			t.Errorf("Event %d: expected description %q, got %q", i, want, events[i].Description)
+		}
+	}
+}
+
 func TestAddEventStructWithDuration(t *testing.T) {
 	// Create a temporary file for testing
 	tmpFile := t.TempDir() + "/test.rem"

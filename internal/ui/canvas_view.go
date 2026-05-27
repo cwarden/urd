@@ -56,12 +56,11 @@ func (m *Model) renderCanvasView() string {
 	statusLayers := m.createStatusBarLayers(visibleSlots)
 	layers = append(layers, statusLayers...)
 
-	// Render the canvas
+	// Render the canvas at full terminal size to prevent artifacts
+	canvas := lipgloss.NewCanvas(m.width, m.height)
 	compositor := lipgloss.NewCompositor(layers...)
-	canvasOutput := compositor.Render()
-
-	// Return the Canvas output
-	return canvasOutput
+	canvas.Compose(compositor)
+	return canvas.Render()
 }
 
 // createTimeColumnLayers creates individual layers for each time label and date separator
@@ -490,7 +489,6 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 		bgColor := m.getEventBackgroundColor(pos.Event)
 		textColor := m.getEventTextColor(bgColor)
 
-		// Create styled block with calculated width
 		block := lipgloss.NewStyle().
 			Background(bgColor).
 			Foreground(textColor).

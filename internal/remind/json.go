@@ -107,7 +107,6 @@ func ConvertJSONToEvents(entries []RemindEntry, timezone *time.Location) []Event
 			// Extract just the description part
 			parts := strings.Fields(description)
 			if len(parts) > 1 && strings.Contains(parts[0], ":") {
-				// First part is time, rest is description
 				description = strings.Join(parts[1:], " ")
 			}
 		}
