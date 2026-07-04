@@ -31,6 +31,18 @@ const (
 	ViewURLSelector       // For choosing which URL to open
 )
 
+// isTextInputMode reports whether the current view captures free-form text
+// input, where global single-letter bindings like "q" (quit) must yield to
+// the keystroke being typed into the input buffer.
+func (m *Model) isTextInputMode() bool {
+	switch m.mode {
+	case ViewEventEditor, ViewGotoDate, ViewSearch:
+		return true
+	default:
+		return false
+	}
+}
+
 type Model struct {
 	// Core components
 	config       *config.Config
@@ -304,7 +316,7 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// Global keys that work in all modes
 		switch action {
 		case "quit":
-			if m.mode != ViewEventEditor {
+			if !m.isTextInputMode() {
 				return m, tea.Quit
 			}
 		case "help":

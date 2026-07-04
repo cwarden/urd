@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/cwarden/urd/internal/config"
 	"github.com/cwarden/urd/internal/remind"
 )
@@ -630,4 +631,65 @@ func TestClipboardPreservesDuration(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestTextInputModesIgnoreQuitBinding verifies that a single-letter quit
+// binding (e.g. "q") is typed into the input buffer while in a text-input mode
+// rather than quitting the application.
+func TestTextInputModesIgnoreQuitBinding(t *testing.T) {
+	cfg := &config.Config{
+		KeyBindings: map[string]string{
+			"q": "quit",
+		},
+	}
+
+	quitKey := tea.KeyPressMsg{Code: 'q', Text: "q"}
+
+	t.Run("q types into search buffer", func(t *testing.T) {
+		m := &Model{
+			config:       cfg,
+			remindClient: &remind.Client{},
+			mode:         ViewSearch,
+		}
+
+		_, cmd := m.handleKeyPress(quitKey)
+
+		if cmd != nil {
+			t.Fatal("Expected no quit command in search mode, but got one")
+		}
+		if m.inputBuffer != "q" {
+			t.Errorf("Expected 'q' to be typed into the search buffer, got %q", m.inputBuffer)
+		}
+	})
+
+	t.Run("q types into goto-date buffer", func(t *testing.T) {
+		m := &Model{
+			config:       cfg,
+			remindClient: &remind.Client{},
+			mode:         ViewGotoDate,
+		}
+
+		_, cmd := m.handleKeyPress(quitKey)
+
+		if cmd != nil {
+			t.Fatal("Expected no quit command in goto-date mode, but got one")
+		}
+		if m.inputBuffer != "q" {
+			t.Errorf("Expected 'q' to be typed into the goto-date buffer, got %q", m.inputBuffer)
+		}
+	})
+
+	t.Run("q still quits in hourly view", func(t *testing.T) {
+		m := &Model{
+			config:       cfg,
+			remindClient: &remind.Client{},
+			mode:         ViewHourly,
+		}
+
+		_, cmd := m.handleKeyPress(quitKey)
+
+		if cmd == nil {
+			t.Fatal("Expected quit command in hourly view, but got none")
+		}
+	})
 }
