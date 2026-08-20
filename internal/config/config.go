@@ -125,15 +125,15 @@ func DefaultConfig() *Config {
 		WrapText:      true,
 
 		QuickTemplate:   `REM %monname% %mday% %year% MSG %"<++>%"%`,
-		TimedTemplate:   `REM %monname% %mday% %year% <++>AT %hour%:%min% +%dura%<++> DURATION %dura%:00<++> MSG %"<++>%"%`,
+		TimedTemplate:   `REM %monname% %mday% %year% <++>AT %hour%:%min% +%dura% TZ %tz%<++> DURATION %dura%:00<++> MSG %"<++>%"%`,
 		AllDayTemplate:  `REM %monname% %mday% %year% MSG %"<++>%"%`,
 		UntimedTemplate: `REM %monname% %mday% %year% <++>MSG %"<++>%"%`,
 		Templates: [10]string{
-			`REM %wdayname% AT %hour%:%min% DURATION 1:00 MSG`, // template0 - weekly recurrence
-			`REM %wdayname% MSG`,                              // template1 - weekly untimed
-			`REM %mday% AT %hour%:%min% DURATION 1:00 MSG`,    // template2 - monthly recurrence
-			`REM %mday% MSG`,                                  // template3 - monthly untimed
-			`REM %monname% %mday% %year% AT %hour%:%min% MSG`, // template4 - instantaneous
+			`REM %wdayname% AT %hour%:%min% TZ %tz% DURATION 1:00 MSG`, // template0 - weekly recurrence
+			`REM %wdayname% MSG`, // template1 - weekly untimed
+			`REM %mday% AT %hour%:%min% TZ %tz% DURATION 1:00 MSG`, // template2 - monthly recurrence
+			`REM %mday% MSG`, // template3 - monthly untimed
+			`REM %monname% %mday% %year% AT %hour%:%min% TZ %tz% MSG`, // template4 - instantaneous
 			``, // template5 - unused
 			``, // template6 - unused
 			``, // template7 - unused

@@ -1,11 +1,16 @@
 package config
 
 import (
+	"bytes"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/cwarden/urd/internal/remind"
 )
 
 func TestDefaultConfig(t *testing.T) {
@@ -323,5 +328,76 @@ func TestGetDefaultEditor(t *testing.T) {
 	editor = getDefaultEditor()
 	if editor != "vi" {
 		t.Errorf("Expected vi, got %s", editor)
+	}
+}
+
+// TestDefaultTemplatesIncludeTimeZone tests that the default templates with an
+// AT clause pin the reminder to the timezone it was created in, and that the
+// lines they produce are valid remind syntax
+func TestDefaultTemplatesIncludeTimeZone(t *testing.T) {
+	if _, err := exec.LookPath("remind"); err != nil {
+		t.Skip("remind not installed")
+	}
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+
+	cfg := DefaultConfig()
+	templates := map[string]string{
+		"timed_template":   cfg.TimedTemplate,
+		"quick_template":   cfg.QuickTemplate,
+		"allday_template":  cfg.AllDayTemplate,
+		"untimed_template": cfg.UntimedTemplate,
+	}
+	for i, template := range cfg.Templates {
+		if template != "" {
+			templates[fmt.Sprintf("template%d", i)] = template
+		}
+	}
+
+	for name, template := range templates {
+		t.Run(name, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), "test.rem")
+			client := remind.NewClient()
+			client.SetFiles([]string{file})
+			client.Timezone = chicago
+
+			if _, err := client.AddEventFromTemplate(template, "Aug 19 2025", "16:30"); err != nil {
+				t.Fatalf("AddEventFromTemplate: %v", err)
+			}
+
+			written, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			line := strings.TrimSpace(string(written))
+
+			// A TZ clause requires an AT clause, so only timed templates carry one
+			wantTZ := strings.Contains(template, "AT ")
+			if hasTZ := strings.Contains(line, "TZ America/Chicago"); hasTZ != wantTZ {
+				t.Errorf("TZ clause present = %v, want %v, in %q", hasTZ, wantTZ, line)
+			}
+
+			// Templates leave <++> cursor markers for the user to fill in, and
+			// end at MSG; complete the reminder before handing it to remind.
+			line = strings.ReplaceAll(line, "<++>", "")
+			if strings.HasSuffix(line, "MSG") {
+				line += " Test reminder"
+			}
+			if err := os.WriteFile(file, []byte(line+"\n"), 0644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			var stderr bytes.Buffer
+			cmd := exec.Command("remind", "-n", "-q", file, "Aug", "19", "2025")
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("remind failed on %q: %v\n%s", line, err, stderr.String())
+			}
+			if stderr.Len() > 0 {
+				t.Errorf("remind complained about %q:\n%s", line, stderr.String())
+			}
+		})
 	}
 }

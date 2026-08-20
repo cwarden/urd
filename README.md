@@ -146,12 +146,37 @@ bind "\\Cl" refresh
 bind "?" help
 bind "Q" quit
 
+# Templates for new reminders
+set timed_template REM %monname% %mday% %year% AT %hour%:%min% TZ %tz% DURATION 1:00 MSG
+set untimed_template REM %monname% %mday% %year% MSG
+
 # Colors
 color today yellow
 color selected reverse
 color weekend blue
 color priority red
 ```
+
+### Template Placeholders
+
+Templates for new reminders expand these placeholders:
+
+| Placeholder | Expands to |
+| --- | --- |
+| `%monname%` | Month name, e.g. `Aug` |
+| `%mon%` | Month number |
+| `%mday%` | Day of month |
+| `%year%` | Year |
+| `%hour%`, `%min%` | Selected time |
+| `%wdayname%`, `%wday%` | Weekday name and number |
+| `%dura%` | Default duration in hours |
+| `%tz%` | Current timezone, e.g. `America/Chicago` |
+
+The default templates with an `AT` clause include `TZ %tz%`, which pins a
+reminder to the timezone it was created in so it keeps meaning the same moment
+if you travel or the zone's rules change. Remind requires an `AT` clause
+alongside `TZ`, so untimed templates have no `TZ`. If the local timezone can't
+be named, the `TZ` clause is left out rather than written empty.
 
 ## Natural Language Event Input
 

@@ -958,6 +958,17 @@ func (c *Client) expandTemplate(template, dateStr, timeStr string) string {
 	remindLine = strings.ReplaceAll(remindLine, "%wday%", fmt.Sprintf("%d", getWeekdayNum(weekdayName)))
 	remindLine = strings.ReplaceAll(remindLine, "%dura%", "1") // Default 1 hour duration
 
+	// A TZ clause pins the reminder to the zone it was created in, so it keeps
+	// meaning the same moment after a move or a DST rule change. Drop the
+	// clause entirely if the local zone has no name remind would accept —
+	// "TZ  MSG" is a syntax error.
+	if tzName := LocalZoneName(c.Timezone); tzName != "" {
+		remindLine = strings.ReplaceAll(remindLine, "%tz%", tzName)
+	} else {
+		remindLine = strings.ReplaceAll(remindLine, " TZ %tz%", "")
+		remindLine = strings.ReplaceAll(remindLine, "%tz%", "")
+	}
+
 	// Remove the trailing % if present
 	if strings.HasSuffix(remindLine, "%") {
 		remindLine = remindLine[:len(remindLine)-1]
