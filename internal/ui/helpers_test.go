@@ -248,3 +248,116 @@ func TestSelectedSlotEventsStability(t *testing.T) {
 		t.Error("Sorting is not stable: output differs between second and third call")
 	}
 }
+
+// TestFormatTimeInZone tests the zone line shown under an event's local time
+func TestFormatTimeInZone(t *testing.T) {
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	losAngeles, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+
+	inZone := func(t time.Time) *time.Time { return &t }
+
+	tests := []struct {
+		name  string
+		event remind.Event
+		want  string
+	}{
+		{
+			name: "different zone shows the time there",
+			event: remind.Event{
+				Time:       inZone(time.Date(2026, 9, 16, 9, 45, 0, 0, chicago)),
+				TimeZone:   "America/Los_Angeles",
+				TimeInZone: inZone(time.Date(2026, 9, 16, 7, 45, 0, 0, losAngeles)),
+			},
+			want: "07:45 America/Los_Angeles",
+		},
+		{
+			name: "same wall clock shows nothing",
+			event: remind.Event{
+				Time:       inZone(time.Date(2026, 9, 16, 9, 0, 0, 0, chicago)),
+				TimeZone:   "America/Chicago",
+				TimeInZone: inZone(time.Date(2026, 9, 16, 9, 0, 0, 0, chicago)),
+			},
+			want: "",
+		},
+		{
+			name: "earlier date in the other zone includes the date",
+			event: remind.Event{
+				Time:       inZone(time.Date(2026, 9, 16, 1, 30, 0, 0, chicago)),
+				TimeZone:   "America/Los_Angeles",
+				TimeInZone: inZone(time.Date(2026, 9, 15, 23, 30, 0, 0, losAngeles)),
+			},
+			want: "Sep 15 23:30 America/Los_Angeles",
+		},
+		{
+			name: "no TZ clause shows nothing",
+			event: remind.Event{
+				Time: inZone(time.Date(2026, 9, 16, 9, 45, 0, 0, chicago)),
+			},
+			want: "",
+		},
+		{
+			name: "untimed event shows nothing",
+			event: remind.Event{
+				TimeZone: "America/Los_Angeles",
+			},
+			want: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatTimeInZone(tt.event); got != tt.want {
+				t.Errorf("formatTimeInZone() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSelectedSlotEventsShowsTimeZone tests that the details box includes the
+// time in a reminder's own zone when it differs from the local one
+func TestSelectedSlotEventsShowsTimeZone(t *testing.T) {
+	losAngeles, err := time.LoadLocation("America/Los_Angeles")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+
+	baseDate := time.Date(2026, 9, 16, 0, 0, 0, 0, time.Local)
+	eventTime := time.Date(2026, 9, 16, 9, 45, 0, 0, time.Local)
+	inZone := eventTime.In(losAngeles)
+	if eventTime.Format("15:04") == inZone.Format("15:04") {
+		t.Skip("local zone matches America/Los_Angeles; nothing to disambiguate")
+	}
+
+	m := &Model{
+		width:         120,
+		height:        30,
+		timeIncrement: 60,
+		selectedDate:  baseDate,
+		selectedSlot:  9,
+		config:        &config.Config{},
+		styles:        defaultStyles(),
+		events: []remind.Event{
+			{
+				ID:          "1",
+				Date:        baseDate,
+				Time:        &eventTime,
+				Duration:    durationPtr(30),
+				Description: "Coffee with a colleague",
+				TimeZone:    "America/Los_Angeles",
+				TimeInZone:  &inZone,
+			},
+		},
+	}
+
+	output := m.renderSelectedSlotEvents()
+	want := inZone.Format("15:04") + " America/Los_Angeles"
+	if !strings.Contains(output, want) {
+		t.Errorf("expected details box to contain %q, got:\n%s", want, output)
+	}
+}

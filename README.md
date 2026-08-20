@@ -12,6 +12,7 @@ A terminal calendar application inspired by wyrd, providing a TUI frontend for t
 - **Cut/Copy/Paste**: Full clipboard support for event management
 - **URL Support**: Open URLs embedded in reminders directly from the TUI
 - **Customizable**: Extensive configuration via urdrc file
+- **Timezone Awareness**: Reminders with a `TZ` clause show their original timezone's time in the details pane
 - **Priority Support**: Mark events with priority levels (!, !!, !!!)
 - **Tag Support**: Organize events with @tags
 - **Template System**: Create reminders using customizable templates (weekly, monthly, todo, goals, etc.)
@@ -181,6 +182,17 @@ REM Mar 25 2024 MSG Birthday party
 REM Mon AT 9:00 MSG Weekly standup
 REM 15 +3 MSG Monthly report due!!
 REM Fri AT 17:00 MSG @work Team meeting
+REM Sep 16 2026 AT 07:45 TZ America/Los_Angeles DURATION 0:30 MSG Coffee with a colleague
+```
+
+Remind converts a reminder with a `TZ` clause to your local time for display. When
+the reminder's timezone shows a different wall clock than yours, the details pane on
+the right also lists the time in that zone, e.g.:
+
+```
+09:45 (30m)
+07:45 America/Los_Angeles
+Coffee with a colleague
 ```
 
 ## Development

@@ -35,6 +35,12 @@ type Event struct {
 	Tags        []string
 	IsRepeating bool
 	RepeatSpec  string
+	// TimeZone holds the IANA zone named by a reminder's TZ clause; empty when
+	// the reminder has no TZ clause.
+	TimeZone string
+	// TimeInZone is the event's start time expressed as a wall clock in
+	// TimeZone. It is nil unless TimeZone is set.
+	TimeInZone *time.Time
 }
 
 type Calendar struct {

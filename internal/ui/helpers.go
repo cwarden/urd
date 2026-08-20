@@ -287,6 +287,11 @@ func (m *Model) renderSelectedSlotEvents() string {
 			}
 			lines = append(lines, m.styles.Event.Render(eventTime))
 
+			// Time in the reminder's own zone, when it differs from ours
+			if zoneTime := formatTimeInZone(event); zoneTime != "" {
+				lines = append(lines, m.styles.Help.Render(zoneTime))
+			}
+
 			// Event description
 			desc := event.Description
 			if m.showEventIDs {
@@ -331,4 +336,25 @@ func (m *Model) renderSelectedSlotEvents() string {
 	content := lipgloss.JoinVertical(lipgloss.Left, lines...)
 	boxStyle := m.styles.Border.Copy().Width(boxWidth)
 	return boxStyle.Render(content)
+}
+
+// formatTimeInZone renders an event's start time in the zone named by its TZ
+// clause, e.g. "07:45 America/Los_Angeles". It returns an empty string when the
+// reminder has no TZ clause or when that zone shows the same wall clock as the
+// local one, in which case repeating the time would tell the reader nothing.
+func formatTimeInZone(event remind.Event) string {
+	if event.TimeZone == "" || event.Time == nil || event.TimeInZone == nil {
+		return ""
+	}
+
+	local := *event.Time
+	inZone := *event.TimeInZone
+	if local.Format("2006-01-02 15:04") == inZone.Format("2006-01-02 15:04") {
+		return ""
+	}
+
+	if local.YearDay() != inZone.YearDay() || local.Year() != inZone.Year() {
+		return fmt.Sprintf("%s %s", inZone.Format("Jan 2 15:04"), event.TimeZone)
+	}
+	return fmt.Sprintf("%s %s", inZone.Format("15:04"), event.TimeZone)
 }

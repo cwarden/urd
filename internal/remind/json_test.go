@@ -129,3 +129,101 @@ func TestConvertJSONToEventsDescription(t *testing.T) {
 		})
 	}
 }
+
+func TestConvertJSONToEventsTimeZone(t *testing.T) {
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	timed := func(mins int) *int { return &mins }
+
+	tests := []struct {
+		name       string
+		entry      RemindEntry
+		wantZone   string
+		wantInZone string // "" means TimeInZone should be nil
+	}{
+		{
+			name: "TZ clause records the zone and the time in it",
+			entry: RemindEntry{
+				Date:     "2026-09-16",
+				LineNo:   1,
+				Time:     timed(9*60 + 45),
+				TimeInTZ: timed(7*60 + 45),
+				TZ:       "America/Los_Angeles",
+				Body:     `9:45-10:15am %"Coffee%"`,
+			},
+			wantZone:   "America/Los_Angeles",
+			wantInZone: "2026-09-16 07:45",
+		},
+		{
+			name: "TZ clause naming the local zone still records it",
+			entry: RemindEntry{
+				Date:     "2026-09-16",
+				LineNo:   2,
+				Time:     timed(9 * 60),
+				TimeInTZ: timed(9 * 60),
+				TZ:       "America/Chicago",
+				Body:     `9:00am %"Local%"`,
+			},
+			wantZone:   "America/Chicago",
+			wantInZone: "2026-09-16 09:00",
+		},
+		{
+			name: "unknown zone falls back to time_in_tz",
+			entry: RemindEntry{
+				Date:     "2026-09-16",
+				LineNo:   3,
+				Time:     timed(9*60 + 45),
+				TimeInTZ: timed(7*60 + 45),
+				TZ:       "Mars/Olympus_Mons",
+				Body:     `9:45am %"Rover check%"`,
+			},
+			wantZone:   "Mars/Olympus_Mons",
+			wantInZone: "2026-09-16 07:45",
+		},
+		{
+			name: "no TZ clause leaves the zone unset",
+			entry: RemindEntry{
+				Date:   "2026-09-16",
+				LineNo: 4,
+				Time:   timed(9 * 60),
+				Body:   `9:00am %"Local%"`,
+			},
+		},
+		{
+			name: "untimed reminder with a TZ clause has no time in zone",
+			entry: RemindEntry{
+				Date:   "2026-09-16",
+				LineNo: 5,
+				TZ:     "America/Los_Angeles",
+				Body:   `%"All day%"`,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			events := ConvertJSONToEvents([]RemindEntry{tt.entry}, chicago)
+			if len(events) != 1 {
+				t.Fatalf("expected 1 event, got %d", len(events))
+			}
+			event := events[0]
+			if event.TimeZone != tt.wantZone {
+				t.Errorf("TimeZone = %q, want %q", event.TimeZone, tt.wantZone)
+			}
+			if tt.wantInZone == "" {
+				if event.TimeInZone != nil {
+					t.Errorf("TimeInZone = %v, want nil", event.TimeInZone)
+				}
+				return
+			}
+			if event.TimeInZone == nil {
+				t.Fatalf("TimeInZone = nil, want %s", tt.wantInZone)
+			}
+			if got := event.TimeInZone.Format("2006-01-02 15:04"); got != tt.wantInZone {
+				t.Errorf("TimeInZone = %s, want %s", got, tt.wantInZone)
+			}
+		})
+	}
+}

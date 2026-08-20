@@ -32,6 +32,8 @@ type RemindEntry struct {
 	RawBody       string   `json:"rawbody"`
 	Body          string   `json:"body"`
 	Tags          []string `json:"tags,omitempty"`
+	TZ            string   `json:"tz,omitempty"`
+	TimeInTZ      *int     `json:"time_in_tz,omitempty"`
 	Skip          string   `json:"skip,omitempty"`
 	Until         string   `json:"until,omitempty"`
 	From          string   `json:"from,omitempty"`
@@ -129,6 +131,7 @@ func ConvertJSONToEvents(entries []RemindEntry, timezone *time.Location) []Event
 				hours, minutes, 0, 0, timezone)
 			event.Time = &eventTime
 			event.Type = EventReminder
+			setEventTimeZone(&event, entry, date, timezone)
 
 			// For multi-day events, use EventDuration (total duration)
 			// For single-day events, use Duration
@@ -174,4 +177,27 @@ func ConvertJSONToEvents(entries []RemindEntry, timezone *time.Location) []Event
 	}
 
 	return events
+}
+
+// setEventTimeZone records the zone named by a reminder's TZ clause along with
+// the event's start time expressed in that zone. Remind reports the trigger
+// time already converted to the local zone, so converting the event's instant
+// is enough; time_in_tz is only used when the zone can't be loaded.
+func setEventTimeZone(event *Event, entry RemindEntry, date time.Time, timezone *time.Location) {
+	if entry.TZ == "" || event.Time == nil {
+		return
+	}
+	event.TimeZone = entry.TZ
+
+	if loc, err := time.LoadLocation(entry.TZ); err == nil {
+		inZone := event.Time.In(loc)
+		event.TimeInZone = &inZone
+		return
+	}
+
+	if entry.TimeInTZ != nil {
+		inZone := time.Date(date.Year(), date.Month(), date.Day(),
+			*entry.TimeInTZ/60, *entry.TimeInTZ%60, 0, 0, timezone)
+		event.TimeInZone = &inZone
+	}
 }
