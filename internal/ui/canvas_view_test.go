@@ -922,3 +922,101 @@ func TestEventSlotCalculationWithDifferentIncrements(t *testing.T) {
 		})
 	}
 }
+
+func TestFitEventText(t *testing.T) {
+	longURL := "Intake MVP changes at https://teams.microsoft.com/meet/253634665268117?p=KJr9vNcKC3cQFDFdqD"
+
+	tests := []struct {
+		name  string
+		text  string
+		width int
+		rows  int
+		want  []string
+	}{
+		{
+			name:  "short text fits on one row",
+			text:  "Check restic",
+			width: 30,
+			rows:  1,
+			want:  []string{"Check restic"},
+		},
+		{
+			name:  "long word is broken instead of overflowing",
+			text:  longURL,
+			width: 30,
+			rows:  2,
+			want:  []string{"Intake MVP changes at", "https://teams.microsoft.com..."},
+		},
+		{
+			name:  "text longer than a single row is truncated",
+			text:  "Renew Duolingo for Henry and family",
+			width: 20,
+			rows:  1,
+			want:  []string{"Renew Duolingo fo..."},
+		},
+		{
+			name:  "text that fits is not truncated",
+			text:  "Pay Innersanctum Invoices",
+			width: 15,
+			rows:  3,
+			want:  []string{"Pay", "Innersanctum", "Invoices"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := strings.Split(fitEventText(tt.text, tt.width, tt.rows), "\n")
+
+			if len(got) > tt.rows {
+				t.Fatalf("got %d lines, want at most %d: %q", len(got), tt.rows, got)
+			}
+			for _, line := range got {
+				if w := lipgloss.Width(line); w > tt.width {
+					t.Errorf("line %q is %d wide, want at most %d", line, w, tt.width)
+				}
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+			for i := range got {
+				if strings.TrimRight(got[i], " ") != tt.want[i] {
+					t.Errorf("line %d = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestEventBlockDoesNotOverflowItsSlots(t *testing.T) {
+	m := &Model{
+		width:         120,
+		height:        40,
+		timeIncrement: 30,
+		selectedDate:  time.Date(2026, 8, 27, 0, 0, 0, 0, time.Local),
+		topSlot:       20, // 10:00
+		selectedSlot:  20,
+		config:        &config.Config{},
+		styles:        defaultStyles(),
+		events: []remind.Event{
+			{
+				Date:        time.Date(2026, 8, 27, 0, 0, 0, 0, time.Local),
+				Time:        timePtr(13, 0),
+				Description: "Intake MVP changes at https://teams.microsoft.com/meet/253634665268117?p=KJr9vNcKC3cQFDFdqD",
+				Duration:    durationPtr(60),
+			},
+		},
+	}
+
+	layers := m.createEventBlockLayers(48, 38, 7, 56)
+	if len(layers) != 1 {
+		t.Fatalf("got %d layers, want 1", len(layers))
+	}
+
+	// A one hour event at 30 minute zoom occupies exactly two rows
+	if got := layers[0].Height(); got != 2 {
+		t.Errorf("event block is %d rows tall, want 2:\n%s", got, layers[0].GetContent())
+	}
+	if got := layers[0].Width(); got > 56 {
+		t.Errorf("event block is %d columns wide, want at most 56", got)
+	}
+}

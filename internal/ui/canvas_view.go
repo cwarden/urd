@@ -8,7 +8,9 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/cwarden/urd/internal/remind"
+	"github.com/muesli/reflow/truncate"
 	"github.com/muesli/reflow/wordwrap"
+	"github.com/muesli/reflow/wrap"
 )
 
 // renderCanvasView renders the entire screen using a lipgloss Canvas
@@ -453,35 +455,7 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 					fullText = fmt.Sprintf("[%s] %s", pos.Event.ID, fullText)
 				}
 
-				// Wrap text across the available rows for multi-slot events
-				if pos.SpanRows > 1 {
-					// Use wordwrap to wrap at whitespace boundaries
-					wrapped := wordwrap.String(fullText, eventWidth)
-					lines := strings.Split(wrapped, "\n")
-
-					// Take up to SpanRows lines
-					if len(lines) <= pos.SpanRows {
-						// All text fits
-						text = strings.Join(lines, "\n")
-					} else {
-						// Text doesn't fit, truncate and add ellipsis
-						displayLines := lines[:pos.SpanRows]
-						// Add ellipsis to the last line
-						lastLine := displayLines[pos.SpanRows-1]
-						if len(lastLine) > eventWidth-3 {
-							lastLine = lastLine[:eventWidth-3]
-						}
-						displayLines[pos.SpanRows-1] = lastLine + "..."
-						text = strings.Join(displayLines, "\n")
-					}
-				} else {
-					// Single row - just truncate if needed
-					if len(fullText) > eventWidth {
-						text = fullText[:eventWidth-3] + "..."
-					} else {
-						text = fullText
-					}
-				}
+				text = fitEventText(fullText, eventWidth, pos.SpanRows)
 			}
 		}
 
@@ -509,6 +483,31 @@ func (m *Model) createEventBlockLayers(slotsPerDay, visibleSlots, timeWidth, eve
 	}
 
 	return layers
+}
+
+// fitEventText wraps text to width, breaking words that are too long to fit on
+// a line of their own (URLs, for example), and clips the result to rows lines so
+// an event block never overflows the slots it occupies.
+func fitEventText(text string, width, rows int) string {
+	if width < 1 || rows < 1 {
+		return ""
+	}
+
+	wrapped := wrap.String(wordwrap.String(text, width), width)
+	lines := strings.Split(wrapped, "\n")
+	if len(lines) <= rows {
+		return strings.Join(lines, "\n")
+	}
+
+	lines = lines[:rows]
+	last := lines[rows-1]
+	if width > 3 {
+		last = truncate.String(last, uint(width-3)) + "..."
+	} else {
+		last = truncate.String(last, uint(width))
+	}
+	lines[rows-1] = last
+	return strings.Join(lines, "\n")
 }
 
 // slotToRowIndex converts a slot index to a row index, accounting for date separators
