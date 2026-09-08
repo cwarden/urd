@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cwarden/urd/internal/config"
@@ -60,8 +61,11 @@ type Model struct {
 	eventCache   map[monthKey]cachedMonth
 	pendingFetch map[monthKey]int
 	cacheGen     int
-	cacheTime    time.Time
-	watchChan    <-chan remind.FileChangeEvent
+	// liveGen mirrors cacheGen for fetch commands, which run outside Update
+	// and skip their query when a reload has made them stale.
+	liveGen   atomic.Int64
+	cacheTime time.Time
+	watchChan <-chan remind.FileChangeEvent
 
 	// Hourly view state
 	selectedSlot  int // Selected time slot index (can span multiple days)

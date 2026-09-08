@@ -69,17 +69,40 @@ func (m *Model) visibleMonths() []monthKey {
 
 // ensureEventsLoaded rebuilds m.events from the cache and returns a command
 // that fetches every visible month that is missing or stale. Months already
-// cached for the current generation are not fetched again.
+// cached for the current generation are not fetched again. The selected
+// month is fetched first and its neighbors wait for it: the built-in remind
+// runs one query at a time, so this gets the visible month on screen after
+// one query instead of three.
 func (m *Model) ensureEventsLoaded() tea.Cmd {
 	if m.source == nil {
 		return nil
 	}
 	m.rebuildEvents()
-	var cmds []tea.Cmd
-	for _, key := range m.visibleMonths() {
-		if cmd := m.fetchMonthCmd(key); cmd != nil {
-			cmds = append(cmds, cmd)
+	months := m.visibleMonths()
+	selected := monthKeyFor(m.selectedDate)
+	first := m.fetchMonthCmd(selected)
+	var rest []tea.Cmd
+	for _, key := range months {
+		if key == selected {
+			continue
 		}
+		if cmd := m.fetchMonthCmd(key); cmd != nil {
+			rest = append(rest, cmd)
+		}
+	}
+	if first == nil {
+		return tea.Batch(rest...)
+	}
+	done := make(chan struct{})
+	cmds := []tea.Cmd{func() tea.Msg {
+		defer close(done)
+		return first()
+	}}
+	for _, cmd := range rest {
+		cmds = append(cmds, func() tea.Msg {
+			<-done
+			return cmd()
+		})
 	}
 	return tea.Batch(cmds...)
 }
@@ -89,6 +112,7 @@ func (m *Model) ensureEventsLoaded() tea.Cmd {
 // they arrive.
 func (m *Model) reloadEvents() tea.Cmd {
 	m.cacheGen++
+	m.liveGen.Store(int64(m.cacheGen))
 	m.cacheTime = time.Now()
 	return m.ensureEventsLoaded()
 }
@@ -121,8 +145,13 @@ func (m *Model) fetchMonthCmd(key monthKey) tea.Cmd {
 		m.pendingFetch = make(map[monthKey]int)
 	}
 	m.pendingFetch[key] = m.cacheGen
-	source, gen := m.source, m.cacheGen
+	source, gen, live := m.source, m.cacheGen, &m.liveGen
 	return func() tea.Msg {
+		if live.Load() != int64(gen) {
+			// A reload made this fetch stale before it ran; its result would
+			// be discarded, so skip the query.
+			return eventLoadedMsg{key: key, gen: gen}
+		}
 		return fetchMonth(source, key, gen)
 	}
 }

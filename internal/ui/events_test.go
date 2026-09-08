@@ -411,3 +411,37 @@ func TestMonthKeyRange(t *testing.T) {
 		t.Errorf("add(-2) = %v", got)
 	}
 }
+
+func TestSelectedMonthIsFetchedBeforeItsNeighbors(t *testing.T) {
+	source := &fakeSource{events: map[monthKey][]remind.Event{}}
+	selected := time.Date(2024, time.March, 15, 0, 0, 0, 0, time.UTC)
+	m := newCacheTestModel(source, selected)
+	runCmd(t, m, m.ensureEventsLoaded())
+	if source.callCount() != 3 {
+		t.Fatalf("fetched %d months, want 3", source.callCount())
+	}
+	source.mu.Lock()
+	first := source.calls[0]
+	source.mu.Unlock()
+	if first != monthKeyFor(selected) {
+		t.Errorf("first fetch was %v, want the selected month %v", first, monthKeyFor(selected))
+	}
+}
+
+func TestFetchStartedBeforeAReloadSkipsTheQuery(t *testing.T) {
+	source := &fakeSource{events: map[monthKey][]remind.Event{}}
+	selected := time.Date(2024, time.March, 15, 0, 0, 0, 0, time.UTC)
+	m := newCacheTestModel(source, selected)
+	stale := m.fetchMonthCmd(monthKeyFor(selected))
+	m.reloadEvents()
+	msg, ok := stale().(eventLoadedMsg)
+	if !ok {
+		t.Fatalf("stale fetch returned %T", msg)
+	}
+	if source.callCount() != 0 {
+		t.Errorf("stale fetch queried the source %d times", source.callCount())
+	}
+	if msg.gen == m.cacheGen {
+		t.Errorf("stale fetch reported the current generation %d", msg.gen)
+	}
+}
