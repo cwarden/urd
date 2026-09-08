@@ -8,6 +8,7 @@ A terminal calendar application inspired by wyrd, providing a TUI frontend for t
 - **Hourly Schedule View**: Display events in hourly/30-minute/15-minute time slots with multi-slot spanning for duration events
 - **Natural Language Event Entry**: Add events using phrases like "tomorrow 2pm meeting"
 - **Live File Watching**: Auto-refresh when remind files change
+- **Background Loading**: Events are fetched from remind one month at a time in the background and cached, so navigation never waits on remind. The months before and after the selected month are prefetched.
 - **Search & Navigation**: Search for events and quickly navigate to specific dates with goto
 - **Cut/Copy/Paste**: Full clipboard support for event management
 - **URL Support**: Open URLs embedded in reminders directly from the TUI
@@ -123,6 +124,8 @@ set time_format 24:00
 set date_format Jan 2, 2006
 
 # Behavior
+# The periodic refresh re-runs remind only when a remind file has been
+# modified since the last load or the calendar day has changed.
 set auto_refresh true
 set refresh_rate 30
 set confirm_delete true

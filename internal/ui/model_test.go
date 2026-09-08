@@ -98,13 +98,12 @@ func TestUpdateSelectedDateFromSlot(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m := &Model{
-				timeIncrement:   tt.timeIncrement,
-				selectedSlot:    tt.initialSlot,
-				topSlot:         tt.initialTopSlot,
-				selectedDate:    tt.initialDate,
-				config:          &config.Config{},
-				remindClient:    &remind.Client{},
-				eventsLoadedFor: tt.initialDate, // Prevent reload in test
+				timeIncrement: tt.timeIncrement,
+				selectedSlot:  tt.initialSlot,
+				topSlot:       tt.initialTopSlot,
+				selectedDate:  tt.initialDate,
+				config:        &config.Config{},
+				remindClient:  &remind.Client{},
 			}
 
 			m.updateSelectedDateFromSlot()
@@ -193,9 +192,8 @@ func TestSlotNavigationDateSync(t *testing.T) {
 						"k": "scroll_up",
 					},
 				},
-				remindClient:    &remind.Client{},
-				mode:            ViewHourly,
-				eventsLoadedFor: baseDate, // Prevent reload in test
+				remindClient: &remind.Client{},
+				mode:         ViewHourly,
 			}
 
 			// Apply the sequence of actions

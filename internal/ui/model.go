@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"errors"
 	"fmt"
 	"os/exec"
 	"regexp"
@@ -51,10 +50,18 @@ type Model struct {
 	parser       *parser.TimeParser
 
 	// View state
-	mode            ViewMode
-	selectedDate    time.Time
-	events          []remind.Event
-	eventsLoadedFor time.Time // Track when we last loaded events
+	mode         ViewMode
+	selectedDate time.Time
+	events       []remind.Event
+
+	// Event cache, one entry per calendar month. cacheGen increases when the
+	// cache is invalidated; entries and in-flight fetches from an older
+	// generation are ignored. cacheTime is when the current generation began.
+	eventCache   map[monthKey]cachedMonth
+	pendingFetch map[monthKey]int
+	cacheGen     int
+	cacheTime    time.Time
+	watchChan    <-chan remind.FileChangeEvent
 
 	// Hourly view state
 	selectedSlot  int // Selected time slot index (can span multiple days)
@@ -138,18 +145,14 @@ func NewModelWithRemind(cfg *config.Config, source remind.ReminderSource, remind
 		styles:        DefaultStyles(),
 	}
 
-	// Load initial events for hourly view
-	m.loadEventsForSchedule()
+	// Load the current month before the first frame; the neighboring months
+	// are fetched in the background from Init.
+	m.loadMonthNow(monthKeyFor(now))
 
-	// Set up file watcher using the source's watch capability
+	// File changes are delivered through Update via waitForFileChange so the
+	// model is only ever touched from the Bubbletea goroutine.
 	if watchChan, err := source.WatchFiles(); err == nil && watchChan != nil {
-		// Start a goroutine to handle file change events
-		go func() {
-			for range watchChan {
-				// Trigger refresh when files change
-				m.loadEvents()
-			}
-		}()
+		m.watchChan = watchChan
 	}
 
 	return m
@@ -193,6 +196,8 @@ func (m *Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.tickCmd(),
 		m.timeUpdateCmd(),
+		m.ensureEventsLoaded(),
+		waitForFileChange(m.watchChan),
 	)
 }
 
@@ -208,12 +213,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKeyPress(msg)
 
 	case tickMsg:
-		// Refresh display periodically
-		if m.config.AutoRefresh {
-			m.loadEvents()
-			return m, m.tickCmd()
+		// Periodic refresh: only re-run remind when a source file changed or
+		// the day rolled over, otherwise the cache stays valid.
+		if !m.config.AutoRefresh {
+			return m, nil
 		}
-		return m, nil
+		if m.cacheIsStale(time.Now()) {
+			return m, tea.Batch(m.reloadEvents(), m.tickCmd())
+		}
+		return m, m.tickCmd()
 
 	case timeUpdateMsg:
 		// Update current time display every minute and handle auto-advance
@@ -221,8 +229,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.timeUpdateCmd()
 
 	case eventLoadedMsg:
-		m.events = msg.events
+		m.applyEventLoaded(msg)
 		return m, nil
+
+	case fileChangedMsg:
+		return m, tea.Batch(m.reloadEvents(), waitForFileChange(m.watchChan))
 
 	case messageTimeoutMsg:
 		m.message = ""
@@ -235,8 +246,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showMessage("Editor session completed")
 		}
 		// Reload events after editing
-		m.loadEvents()
-		return m, nil
+		return m, m.reloadEvents()
 	}
 
 	return m, nil
@@ -327,11 +337,11 @@ func (m *Model) handleKeyPress(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "refresh":
-			m.loadEvents()
+			cmd := m.reloadEvents()
 			now := time.Now()
 			currentTimeSlot := m.getCurrentTimeSlot()
 			m.showMessage(fmt.Sprintf("Refreshed - Now: %02d:%02d, slot=%d, selected=%d", now.Hour(), now.Minute(), currentTimeSlot, m.selectedSlot))
-			return m, nil
+			return m, cmd
 		}
 	} else {
 		// No configured binding - check for hard-coded keys
@@ -463,6 +473,9 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	action := m.getActionForKey(key)
 
+	// Commands returned by navigation handlers fetch events in the background.
+	var cmd tea.Cmd
+
 	switch action {
 	case "scroll_down":
 		// If focused on untimed reminders, this is handled later
@@ -476,7 +489,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.topSlot++
 		}
 		// Update selectedDate to match the day of the selected slot
-		m.updateSelectedDateFromSlot()
+		cmd = m.updateSelectedDateFromSlot()
 
 	case "scroll_up":
 		// If focused on untimed reminders, this is handled later
@@ -490,47 +503,37 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.topSlot--
 		}
 		// Update selectedDate to match the day of the selected slot
-		m.updateSelectedDateFromSlot()
+		cmd = m.updateSelectedDateFromSlot()
 
 	case "next_day":
 		// Next day - jump forward by one day
 		m.selectedDate = m.selectedDate.AddDate(0, 0, 1)
-		if m.needsEventReload() {
-			m.loadEventsForSchedule()
-		}
+		cmd = m.ensureEventsLoaded()
 
 	case "previous_day":
 		// Previous day - jump back by one day
 		m.selectedDate = m.selectedDate.AddDate(0, 0, -1)
-		if m.needsEventReload() {
-			m.loadEventsForSchedule()
-		}
+		cmd = m.ensureEventsLoaded()
 
 	case "next_week":
 		// Next week - jump forward by one week
 		m.selectedDate = m.selectedDate.AddDate(0, 0, 7)
-		if m.needsEventReload() {
-			m.loadEventsForSchedule()
-		}
+		cmd = m.ensureEventsLoaded()
 
 	case "previous_week":
 		// Previous week - jump back by one week
 		m.selectedDate = m.selectedDate.AddDate(0, 0, -7)
-		if m.needsEventReload() {
-			m.loadEventsForSchedule()
-		}
+		cmd = m.ensureEventsLoaded()
 
 	case "next_month":
 		// Next month - jump forward by one month
 		m.selectedDate = m.selectedDate.AddDate(0, 1, 0)
-		// Always reload events when changing months
-		m.loadEventsForSchedule()
+		cmd = m.ensureEventsLoaded()
 
 	case "previous_month":
 		// Previous month - jump back by one month
 		m.selectedDate = m.selectedDate.AddDate(0, -1, 0)
-		// Always reload events when changing months
-		m.loadEventsForSchedule()
+		cmd = m.ensureEventsLoaded()
 
 	case "home":
 		// Go to current time - start fresh
@@ -547,8 +550,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.topSlot = 0
 		}
 
-		// Always load events for the current date (force reload)
-		m.loadEventsForSchedule()
+		cmd = m.ensureEventsLoaded()
 		// Show debug message
 		m.showMessage(fmt.Sprintf("Now: %02d:%02d, slot=%d, top=%d", now.Hour(), now.Minute(), m.selectedSlot, m.topSlot))
 
@@ -609,14 +611,15 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "search_next":
 		// Find next search result
 		if m.searchTerm != "" {
-			found := m.findNextSearchResult()
+			var found bool
+			found, cmd = m.findNextSearchResult()
 			if !found {
 				m.showMessage("No more search results found.")
 			}
 		} else {
 			m.showMessage("No active search. Press / to search.")
 		}
-		return m, nil
+		return m, cmd
 
 	case "quick_add":
 		// Quick add event using natural language parsing
@@ -1075,7 +1078,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 						} else {
 							m.showMessage("Event cut to clipboard")
 							// Reload events to show the change
-							m.loadEvents()
+							cmd = m.reloadEvents()
 						}
 						break
 					}
@@ -1104,7 +1107,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				} else {
 					m.showMessage("Event cut to clipboard")
 					// Reload events to show the change
-					m.loadEvents()
+					cmd = m.reloadEvents()
 				}
 			} else {
 				// Multiple events - show selector
@@ -1114,7 +1117,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.mode = ViewClipboardSelector
 			}
 		}
-		return m, nil
+		return m, cmd
 
 	case "paste":
 		// Paste the clipboard event at the selected time slot or as untimed
@@ -1381,7 +1384,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	}
 
-	return m, nil
+	return m, cmd
 }
 
 func (m *Model) handleEventSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -1498,6 +1501,7 @@ func (m *Model) handleEventSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd
 }
 
 func (m *Model) handleEditorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch msg.Code {
 	case tea.KeyEscape:
 		m.mode = ViewHourly
@@ -1515,18 +1519,18 @@ func (m *Model) handleEditorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if err == nil {
 				m.showMessage("Event added - launching editor...")
 				m.mode = ViewHourly
-				m.loadEvents()
+				cmd = m.reloadEvents()
 
 				// Launch editor for the newly created event
 				if len(m.config.RemindFiles) > 0 {
-					return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
+					return m, tea.Batch(cmd, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber))
 				}
 			} else {
 				m.showMessage(fmt.Sprintf("Error: %v", err))
 			}
 		}
 		m.mode = ViewHourly
-		return m, nil
+		return m, cmd
 
 	case tea.KeyBackspace:
 		if m.cursorPos > 0 {
@@ -1560,6 +1564,7 @@ func (m *Model) handleEditorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleGotoDateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch msg.Code {
 	case tea.KeyEscape:
 		m.mode = ViewHourly
@@ -1616,7 +1621,7 @@ func (m *Model) handleGotoDateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				m.centerSelectedSlot()
 
 				// Load events for the new date
-				m.loadEventsForSchedule()
+				cmd = m.ensureEventsLoaded()
 				m.showMessage(fmt.Sprintf("Jumped to %s (slot %d)", m.selectedDate.Format("Monday, Jan 2, 2006"), m.selectedSlot))
 				// Clear input buffer
 				m.inputBuffer = ""
@@ -1626,7 +1631,7 @@ func (m *Model) handleGotoDateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.mode = ViewHourly
-		return m, nil
+		return m, cmd
 	case tea.KeyBackspace:
 		if m.cursorPos > 0 {
 			m.inputBuffer = m.inputBuffer[:m.cursorPos-1] + m.inputBuffer[m.cursorPos:]
@@ -1654,6 +1659,7 @@ func (m *Model) handleGotoDateKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleSearchKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	switch msg.Code {
 	case tea.KeyEscape:
 		m.mode = ViewHourly
@@ -1663,7 +1669,8 @@ func (m *Model) handleSearchKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.inputBuffer != "" {
 			m.searchTerm = m.inputBuffer
 			// Search forward from current position
-			found := m.findNextSearchResult()
+			var found bool
+			found, cmd = m.findNextSearchResult()
 			if found {
 				m.showMessage("Press 'n' to find next occurrence.")
 			} else {
@@ -1671,7 +1678,7 @@ func (m *Model) handleSearchKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.mode = ViewHourly
-		return m, nil
+		return m, cmd
 	case tea.KeyBackspace:
 		if m.cursorPos > 0 {
 			m.inputBuffer = m.inputBuffer[:m.cursorPos-1] + m.inputBuffer[m.cursorPos:]
@@ -1698,16 +1705,18 @@ func (m *Model) handleSearchKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 
 	// Handle 'n' key even in search mode for next result
 	if msg.String() == "n" && m.searchTerm != "" {
-		found := m.findNextSearchResult()
+		var found bool
+		found, cmd = m.findNextSearchResult()
 		if !found {
 			m.showMessage("No more search results found.")
 		}
 	}
 
-	return m, nil
+	return m, cmd
 }
 
 func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	var cmd tea.Cmd
 	// Get the key string and action
 	key := msg.String()
 	// Handle special key representations
@@ -1773,7 +1782,7 @@ func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea
 				} else {
 					m.showMessage("Event cut to clipboard")
 					// Reload events to show the change
-					m.loadEvents()
+					cmd = m.reloadEvents()
 				}
 			}
 
@@ -1783,7 +1792,7 @@ func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea
 			m.selectedEventIndex = 0
 			m.clipboardOperation = ""
 		}
-		return m, nil
+		return m, cmd
 	}
 
 	// Handle numeric keys for quick selection (1-9)
@@ -1814,7 +1823,7 @@ func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea
 				} else {
 					m.showMessage("Event cut to clipboard")
 					// Reload events to show the change
-					m.loadEvents()
+					cmd = m.reloadEvents()
 				}
 			}
 
@@ -1823,7 +1832,7 @@ func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea
 			m.eventChoices = nil
 			m.selectedEventIndex = 0
 			m.clipboardOperation = ""
-			return m, nil
+			return m, cmd
 		}
 	}
 
@@ -1947,9 +1956,9 @@ func (m *Model) handleURLSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) 
 }
 
 // findNextSearchResult searches forward from current position for next matching event
-func (m *Model) findNextSearchResult() bool {
+func (m *Model) findNextSearchResult() (bool, tea.Cmd) {
 	if m.searchTerm == "" {
-		return false
+		return false, nil
 	}
 
 	// If we have a remind client, use remind -n for unlimited search
@@ -1978,7 +1987,7 @@ func (m *Model) findNextSearchResult() bool {
 		// Use FindNext to search forward indefinitely
 		event, err := m.remindClient.FindNext(m.searchTerm, currentTime)
 		if err != nil || event == nil {
-			return false
+			return false, nil
 		}
 
 		// Navigate to the found event
@@ -1996,77 +2005,19 @@ func (m *Model) findNextSearchResult() bool {
 		}
 
 		// Load events for the new date
-		m.loadEventsForSchedule()
+		cmd := m.ensureEventsLoaded()
 
 		m.ensureSelectedSlotVisible()
-		return true
+		return true, cmd
 	}
 
 	// For non-remind sources, search is not supported
-	return false
-}
-
-func (m *Model) loadEvents() {
-	// Get events for the selected month in hourly view
-	start := time.Date(m.selectedDate.Year(), m.selectedDate.Month(), 1, 0, 0, 0, 0, time.Local)
-	end := start.AddDate(0, 1, -1)
-
-	events, err := m.source.GetEvents(start, end)
-	if err == nil {
-		m.events = events
-		m.syntaxError = nil // Clear any previous syntax error
-	} else {
-		// Check if this is a syntax error
-		var syntaxErr *remind.RemindSyntaxError
-		if errors.As(err, &syntaxErr) {
-			m.syntaxError = err // Store syntax error for persistent display
-		} else {
-			// For other errors, just show a temporary message
-			m.showMessage(fmt.Sprintf("Error loading events: %v", err))
-		}
-	}
-}
-
-func (m *Model) loadEventsForSchedule() {
-	// Load events for a wider date range for hourly view
-	start := m.selectedDate.AddDate(0, 0, -14) // Load 2 weeks before
-	end := m.selectedDate.AddDate(0, 0, 14)    // Load 2 weeks after
-
-	events, err := m.source.GetEvents(start, end)
-	if err == nil {
-		m.events = events
-		m.eventsLoadedFor = m.selectedDate // Track when we last loaded events
-		m.syntaxError = nil                // Clear any previous syntax error
-	} else {
-		// Check if this is a syntax error
-		var syntaxErr *remind.RemindSyntaxError
-		if errors.As(err, &syntaxErr) {
-			m.syntaxError = err // Store syntax error for persistent display
-		} else {
-			// For other errors, just show a temporary message
-			m.showMessage(fmt.Sprintf("Error loading events: %v", err))
-		}
-	}
-}
-
-// needsEventReload checks if we need to reload events based on current selected date
-func (m *Model) needsEventReload() bool {
-	if m.eventsLoadedFor.IsZero() {
-		return true // Never loaded
-	}
-
-	// Reload if we've moved more than 1 week from when we last loaded
-	daysSinceLoad := int(m.selectedDate.Sub(m.eventsLoadedFor).Hours() / 24)
-	if daysSinceLoad < -7 || daysSinceLoad > 7 {
-		return true
-	}
-
-	return false
+	return false, nil
 }
 
 // updateSelectedDateFromSlot updates the selectedDate when the selected slot crosses day boundaries
 // This keeps the calendar in sync with the hourly view
-func (m *Model) updateSelectedDateFromSlot() {
+func (m *Model) updateSelectedDateFromSlot() tea.Cmd {
 	// In this codebase, selectedDate acts as a reference date where slot 0 = midnight of selectedDate
 	// When we scroll through slots, we need to check if we've moved to a different day
 	// and update selectedDate accordingly to keep the calendar synchronized
@@ -2090,11 +2041,10 @@ func (m *Model) updateSelectedDateFromSlot() {
 		m.selectedSlot = m.selectedSlot - (dayOffset * slotsPerDay)
 		m.topSlot = m.topSlot - (dayOffset * slotsPerDay)
 
-		// Check if we need to reload events for the new date range
-		if m.needsEventReload() {
-			m.loadEventsForSchedule()
-		}
+		// Fetch any month that is not cached yet for the new date
+		return m.ensureEventsLoaded()
 	}
+	return nil
 }
 
 func (m *Model) getEventAtSlot(slot int) *remind.Event {
@@ -2586,9 +2536,6 @@ func openURLCmd(url string) tea.Cmd {
 type tickMsg struct{}
 type timeUpdateMsg struct{}
 type messageTimeoutMsg struct{}
-type eventLoadedMsg struct {
-	events []remind.Event
-}
 type editorFinishedMsg struct {
 	err error
 }
