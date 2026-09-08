@@ -48,8 +48,7 @@ func NewClient() *Client {
 }
 
 // UseCommand makes the client run the external remind program at path
-// instead of the built-in one. urd itself always prefers the built-in
-// remind; this is for callers that need a specific program.
+// instead of the built-in one.
 func (c *Client) UseCommand(path string) {
 	c.RemindPath = path
 	c.Runner = nil

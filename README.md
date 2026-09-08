@@ -50,7 +50,7 @@ urd list
 
 ```
 
-**Note**: On platforms without the built-in remind, the application will warn if `remind` is not installed but will still start the TUI interface. Install `remind` to see actual calendar events; `remind_command` in the urdrc file names the program to run. Where remind is built in, `remind_command` is ignored.
+**Note**: Setting `remind_command` in the urdrc file makes urd run that program instead of the built-in remind. On platforms without the built-in remind, the external `remind` is used in any case; the application will warn if it is not installed but will still start the TUI interface.
 
 ## Keyboard Shortcuts
 

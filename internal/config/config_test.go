@@ -19,6 +19,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.RemindCommand != "remind" {
 		t.Errorf("Wrong default remind command: %s", cfg.RemindCommand)
 	}
+	if cfg.RemindCommandSet {
+		t.Error("RemindCommandSet is true by default")
+	}
 
 	if cfg.WeekStartDay != time.Monday {
 		t.Errorf("Wrong default week start day: %v", cfg.WeekStartDay)
@@ -266,6 +269,9 @@ color selected reverse
 	// Verify loaded values
 	if cfg.RemindCommand != "/usr/local/bin/remind" {
 		t.Errorf("Wrong remind command: %s", cfg.RemindCommand)
+	}
+	if !cfg.RemindCommandSet {
+		t.Error("RemindCommandSet is false after remind_command was set")
 	}
 
 	if len(cfg.RemindFiles) != 2 {

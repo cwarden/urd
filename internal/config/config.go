@@ -12,14 +12,18 @@ import (
 )
 
 // DefaultRemindCommand is the default remind_command, the external remind
-// program used on platforms where remind is not built into urd.
+// program used when the urdrc file does not set remind_command and remind
+// is not built into urd.
 const DefaultRemindCommand = "remind"
 
 type Config struct {
 	// File settings
 	RemindFiles   []string
 	RemindCommand string
-	Editor        string
+	// RemindCommandSet reports whether the urdrc file set remind_command.
+	// An explicit setting selects that program over the built-in remind.
+	RemindCommandSet bool
+	Editor           string
 
 	// Display settings
 	WeekStartDay   time.Weekday
@@ -275,6 +279,7 @@ func (c *Config) setVariable(name, value string) error {
 
 	case "remind_command":
 		c.RemindCommand = value
+		c.RemindCommandSet = true
 
 	case "editor":
 		c.Editor = value
