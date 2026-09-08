@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// DefaultRemindCommand is the remind_command value that selects the remind
-// program built into urd where one is available.
+// DefaultRemindCommand is the default remind_command, the external remind
+// program used on platforms where remind is not built into urd.
 const DefaultRemindCommand = "remind"
 
 type Config struct {
