@@ -35,7 +35,8 @@ make install
 ## Requirements
 
 - Go 1.21 or later
-- `remind` command-line tool installed
+- On Linux the remind calendar program is built into urd; on other
+  platforms the `remind` command-line tool must be installed
 - Terminal with UTF-8 support
 
 ## Usage
@@ -49,7 +50,7 @@ urd list
 
 ```
 
-**Note**: The application will warn if `remind` is not installed but will still start the TUI interface. Install `remind` to see actual calendar events.
+**Note**: On platforms without the built-in remind, the application will warn if `remind` is not installed but will still start the TUI interface. Install `remind` to see actual calendar events. Setting `remind_command` in the urdrc file to anything other than `remind` makes urd run that program instead of the built-in one.
 
 ## Keyboard Shortcuts
 

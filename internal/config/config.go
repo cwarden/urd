@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// DefaultRemindCommand is the remind_command value that selects the remind
+// program built into urd where one is available.
+const DefaultRemindCommand = "remind"
+
 type Config struct {
 	// File settings
 	RemindFiles   []string
@@ -54,7 +58,7 @@ func DefaultConfig() *Config {
 
 	return &Config{
 		RemindFiles:   []string{filepath.Join(home, ".reminders")},
-		RemindCommand: "remind",
+		RemindCommand: DefaultRemindCommand,
 		Editor:        getDefaultEditor(),
 
 		WeekStartDay:   time.Monday,

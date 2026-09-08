@@ -53,6 +53,10 @@ func runTUI(cmd *cobra.Command, args []string) error {
 	// Always start with remind client
 	remindClient := remind.NewClient()
 	remindClient.RemindPath = cfg.RemindCommand
+	if cfg.RemindCommand != config.DefaultRemindCommand {
+		// An explicit remind_command selects that program over the built-in remind.
+		remindClient.UseCommand(cfg.RemindCommand)
+	}
 
 	// Use command-line specified files if provided, otherwise use config files
 	if len(remindFiles) > 0 {

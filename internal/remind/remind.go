@@ -27,19 +27,31 @@ func (e *RemindSyntaxError) Error() string {
 }
 
 type Client struct {
+	// RemindPath names the external remind program, used when Runner is nil.
 	RemindPath string
-	Files      []string
-	Timezone   *time.Location
-	watcher    *FileWatcher
-	eventChan  chan FileChangeEvent
+	// Runner runs remind. NewClient sets it to the remind program built into
+	// this binary where one is available, and to nil elsewhere.
+	Runner    Runner
+	Files     []string
+	Timezone  *time.Location
+	watcher   *FileWatcher
+	eventChan chan FileChangeEvent
 }
 
 func NewClient() *Client {
 	return &Client{
 		RemindPath: "remind",
+		Runner:     defaultRunner(),
 		Files:      []string{},
 		Timezone:   time.Local,
 	}
+}
+
+// UseCommand makes the client run the external remind program at path
+// instead of the built-in one.
+func (c *Client) UseCommand(path string) {
+	c.RemindPath = path
+	c.Runner = nil
 }
 
 func (c *Client) SetFiles(files []string) {
@@ -131,28 +143,24 @@ func (c *Client) getEventsForMonth(monthStart time.Time) ([]Event, error) {
 		fmt.Sprintf("%d", monthStart.Day()),
 		fmt.Sprintf("%d", monthStart.Year()))
 
-	cmd := exec.Command(c.RemindPath, args...)
-
-	// Capture stdout and stderr separately
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	stdout, stderr, exitCode, err := c.run(args, "")
+	if err != nil {
+		return nil, fmt.Errorf("remind command failed: %w", err)
+	}
 
 	// Check for syntax errors in stderr first
-	if stderr.Len() > 0 {
-		if syntaxErr := c.parseRemindError(stderr.String()); syntaxErr != nil {
+	if len(stderr) > 0 {
+		if syntaxErr := c.parseRemindError(string(stderr)); syntaxErr != nil {
 			return nil, syntaxErr
 		}
 	}
 
-	// If command failed and no stdout, return error
-	if err != nil && stdout.Len() == 0 {
-		return nil, fmt.Errorf("remind command failed: %w", err)
+	// If remind failed and produced no output, return error
+	if exitCode != 0 && len(stdout) == 0 {
+		return nil, fmt.Errorf("remind exited with status %d: %s", exitCode, strings.TrimSpace(string(stderr)))
 	}
 
-	output := []byte(stdout.String())
+	output := stdout
 
 	// Parse JSON output
 	months, parseErr := ParseRemindJSON(output)
@@ -214,9 +222,8 @@ func (c *Client) FindNext(searchTerm string, afterTime time.Time) (*Event, error
 			date.Format("2"),    // Day
 			date.Format("2006")) // Year
 
-		cmd := exec.Command(c.RemindPath, args...)
-		output, err := cmd.Output()
-		if err != nil {
+		output, _, exitCode, err := c.run(args, "")
+		if err != nil || exitCode != 0 {
 			// If remind fails for this date, continue with next
 			continue
 		}
@@ -779,17 +786,20 @@ func (c *Client) parseRemindError(output string) error {
 
 func (c *Client) TestConnection() error {
 	// Test with a simple remind command that should always work
-	cmd := exec.Command(c.RemindPath, "-n")
-	cmd.Stdin = strings.NewReader("REM MSG test\n")
-	output, err := cmd.CombinedOutput()
+	stdout, stderr, exitCode, err := c.run([]string{"-n"}, "REM MSG test\n")
 	if err != nil {
-		// Check if we at least got remind output (it may exit 1 but still work)
-		if len(output) > 0 && (strings.Contains(string(output), "No reminders") || strings.Contains(string(output), "REM")) {
-			return nil
-		}
 		return fmt.Errorf("remind command not found or not working: %w", err)
 	}
-	return nil
+	if exitCode == 0 {
+		return nil
+	}
+	// remind exits 1 when given no file, after printing its usage; that
+	// still shows it works.
+	output := string(stdout) + string(stderr)
+	if strings.Contains(output, "No reminders") || strings.Contains(output, "REM") {
+		return nil
+	}
+	return fmt.Errorf("remind exited with status %d: %s", exitCode, strings.TrimSpace(string(stderr)))
 }
 
 // EditEvent opens the remind file for editing at a specific line number
