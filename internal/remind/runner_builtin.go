@@ -1,7 +1,7 @@
 package remind
 
 import (
-	remindgo "github.com/cwarden/remind"
+	remindgo "github.com/cwarden/remind/v6"
 )
 
 // BuiltinRunner runs the remind program compiled into this binary. It is

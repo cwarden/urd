@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	remindgo "github.com/cwarden/remind"
+	remindgo "github.com/cwarden/remind/v6"
 )
 
 func requireBuiltin(t *testing.T) {
