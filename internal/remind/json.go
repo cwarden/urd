@@ -20,24 +20,52 @@ type RemindJSON struct {
 
 // RemindEntry represents a single reminder entry in the JSON
 type RemindEntry struct {
-	Date          string   `json:"date"`
-	Filename      string   `json:"filename"`
-	LineNo        int      `json:"lineno"`
-	Duration      *int     `json:"duration,omitempty"`
-	Time          *int     `json:"time,omitempty"`
-	TDelta        *int     `json:"tdelta,omitempty"`
-	EventDuration *int     `json:"eventduration,omitempty"`
-	EventStart    string   `json:"eventstart,omitempty"`
-	Priority      int      `json:"priority"`
-	RawBody       string   `json:"rawbody"`
-	Body          string   `json:"body"`
-	Tags          []string `json:"tags,omitempty"`
-	TZ            string   `json:"tz,omitempty"`
-	TimeInTZ      *int     `json:"time_in_tz,omitempty"`
-	Skip          string   `json:"skip,omitempty"`
-	Until         string   `json:"until,omitempty"`
-	From          string   `json:"from,omitempty"`
-	PassThru      string   `json:"passthru,omitempty"`
+	Date          string `json:"date"`
+	Filename      string `json:"filename"`
+	LineNo        int    `json:"lineno"`
+	Duration      *int   `json:"duration,omitempty"`
+	Time          *int   `json:"time,omitempty"`
+	TDelta        *int   `json:"tdelta,omitempty"`
+	EventDuration *int   `json:"eventduration,omitempty"`
+	EventStart    string `json:"eventstart,omitempty"`
+	Priority      int    `json:"priority"`
+	RawBody       string `json:"rawbody"`
+	Body          string `json:"body"`
+	Tags          Tags   `json:"tags,omitempty"`
+	TZ            string `json:"tz,omitempty"`
+	TimeInTZ      *int   `json:"time_in_tz,omitempty"`
+	Skip          string `json:"skip,omitempty"`
+	Until         string `json:"until,omitempty"`
+	From          string `json:"from,omitempty"`
+	PassThru      string `json:"passthru,omitempty"`
+}
+
+// Tags holds the TAG clauses of one reminder.
+//
+// remind writes them as a single comma-separated string rather than as a
+// list, so a plain []string field makes the whole document fail to parse as
+// soon as any reminder in it carries a TAG.
+type Tags []string
+
+func (t *Tags) UnmarshalJSON(data []byte) error {
+	var joined string
+	if err := json.Unmarshal(data, &joined); err != nil {
+		return fmt.Errorf("remind: tags is not a string: %s", data)
+	}
+	*t = splitTags(joined)
+	return nil
+}
+
+// splitTags separates the tags of one reminder. A tag holds any character
+// except whitespace and a comma, so a comma always separates two of them.
+func splitTags(s string) Tags {
+	var tags Tags
+	for _, part := range strings.Split(s, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			tags = append(tags, part)
+		}
+	}
+	return tags
 }
 
 // extractSubject returns the text between the first pair of %" markers in

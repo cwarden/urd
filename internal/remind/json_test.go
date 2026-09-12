@@ -227,3 +227,90 @@ func TestConvertJSONToEventsTimeZone(t *testing.T) {
 		})
 	}
 }
+
+func TestParseRemindJSONReadsTagsWrittenAsAString(t *testing.T) {
+	// remind writes the TAG clauses of a reminder as one comma-separated
+	// string, which is what a CalDAV client such as remindav leaves behind.
+	const output = `[{"monthname":"September","year":2026,"entries":[
+{"date":"2026-09-12","filename":"/srv/rsync/shared/.reminders","lineno":1,"tags":"558537bf-a7b6-4190-9d38-d2f08741565a","duration":60,"time":420,"priority":5000,"eventstart":"2026-09-12T07:00","eventduration":60,"body":"Davx test"}
+]}]`
+
+	months, err := ParseRemindJSON([]byte(output))
+	if err != nil {
+		t.Fatalf("a reminder with a TAG made the whole document fail to parse: %v", err)
+	}
+	if len(months) != 1 || len(months[0].Entries) != 1 {
+		t.Fatalf("got %d months, want one holding one entry", len(months))
+	}
+	entry := months[0].Entries[0]
+	if len(entry.Tags) != 1 || entry.Tags[0] != "558537bf-a7b6-4190-9d38-d2f08741565a" {
+		t.Errorf("tags = %v, want the one tag", entry.Tags)
+	}
+	if entry.Body != "Davx test" {
+		t.Errorf("body = %q, want the reminder to have been read as well", entry.Body)
+	}
+}
+
+func TestParseRemindJSONReadsSeveralTags(t *testing.T) {
+	const output = `[{"entries":[{"date":"2026-09-12","tags":"foo,bar,quux","body":"x"}]}]`
+	months, err := ParseRemindJSON([]byte(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := months[0].Entries[0].Tags
+	want := []string{"foo", "bar", "quux"}
+	if len(got) != len(want) {
+		t.Fatalf("tags = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("tags = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestParseRemindJSONReportsTagsItCannotRead(t *testing.T) {
+	// A null is left out: the convention in encoding/json is that it stands
+	// for an absent value rather than a bad one.
+	for _, tags := range []string{"42", "true", `["foo"]`, `{"a":1}`} {
+		output := `[{"entries":[{"date":"2026-09-12","tags":` + tags + `,"body":"x"}]}]`
+		if _, err := ParseRemindJSON([]byte(output)); err == nil {
+			t.Errorf("a tags value of %s was accepted, want a string", tags)
+		}
+	}
+}
+
+func TestConvertJSONToEventsCarriesTheTagsOver(t *testing.T) {
+	const output = `[{"entries":[{"date":"2026-09-12","lineno":1,"tags":"a,b","time":420,"body":"x"}]}]`
+	months, err := ParseRemindJSON([]byte(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := ConvertJSONToEvents(months[0].Entries, time.UTC)
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if got := events[0].Tags; len(got) != 2 || got[0] != "a" || got[1] != "b" {
+		t.Errorf("event tags = %v, want a and b", got)
+	}
+}
+
+func TestSplitTagsIgnoresEmptyEntries(t *testing.T) {
+	if got := splitTags(""); got != nil {
+		t.Errorf("splitTags(\"\") = %v, want nothing", got)
+	}
+	if got := splitTags(",,"); got != nil {
+		t.Errorf("splitTags(\",,\") = %v, want nothing", got)
+	}
+}
+
+func TestParseRemindJSONReadsANullTagsValueAsNoTags(t *testing.T) {
+	const output = `[{"entries":[{"date":"2026-09-12","tags":null,"body":"x"}]}]`
+	months, err := ParseRemindJSON([]byte(output))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := months[0].Entries[0].Tags; got != nil {
+		t.Errorf("tags = %v, want none", got)
+	}
+}
