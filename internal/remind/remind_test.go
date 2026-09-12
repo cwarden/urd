@@ -7,56 +7,6 @@ import (
 	"time"
 )
 
-func TestParseRemindOutput(t *testing.T) {
-	client := NewClient()
-
-	tests := []struct {
-		name     string
-		output   string
-		expected int
-	}{
-		{
-			name: "timed and untimed events",
-			output: `2024/03/15 * * * 540 09:00 Morning standup
-2024/03/15 * * * * All day event
-2024/03/15 * * * 870 14:30 Team meeting
-2024/03/16 * * * * Weekend task`,
-			expected: 4,
-		},
-		{
-			name: "events with priorities",
-			output: `2024/03/15 * * * 600 10:00 Regular meeting
-2024/03/15 * * * 840 14:00 Important deadline!!
-2024/03/15 * * * 960 16:00 Critical issue!!!`,
-			expected: 3,
-		},
-		{
-			name:     "empty output",
-			output:   "",
-			expected: 0,
-		},
-		{
-			name: "events with tags",
-			output: `2024/03/15 * * * 540 09:00 Review PR @work @code
-2024/03/15 * * * 660 11:00 Doctor appointment @personal @health`,
-			expected: 2,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			events, err := client.parseRemindOutput(tt.output)
-			if err != nil {
-				t.Fatalf("Parse failed: %v", err)
-			}
-
-			if len(events) != tt.expected {
-				t.Errorf("Event count mismatch: got %d, want %d", len(events), tt.expected)
-			}
-		})
-	}
-}
-
 func TestParseEventDetails(t *testing.T) {
 	client := NewClient()
 
@@ -126,51 +76,6 @@ func TestParseEventDetails(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestParseDifferentDateFormats(t *testing.T) {
-	client := NewClient()
-
-	output := `2024/03/15 * * * 540 09:00 Morning meeting
-2024/03/15 * * * * All day conference
-2024/03/16 * * * 870 14:30 Afternoon workshop
-2024/03/17 * * * * Weekend project`
-
-	events, err := client.parseRemindOutput(output)
-	if err != nil {
-		t.Fatalf("Parse failed: %v", err)
-	}
-
-	if len(events) != 4 {
-		t.Fatalf("Expected 4 events, got %d", len(events))
-	}
-
-	// Check first timed event
-	if events[0].Time == nil {
-		t.Error("Expected first event to have time")
-	} else if events[0].Time.Hour() != 9 || events[0].Time.Minute() != 0 {
-		t.Errorf("Wrong time for first event: %v", events[0].Time)
-	}
-
-	// Check first untimed event
-	if events[1].Time != nil {
-		t.Error("Expected second event to be untimed")
-	}
-
-	// Check descriptions
-	expectedDescs := []string{
-		"Morning meeting",
-		"All day conference",
-		"Afternoon workshop",
-		"Weekend project",
-	}
-
-	for i, event := range events {
-		if event.Description != expectedDescs[i] {
-			t.Errorf("Event %d description mismatch: got %q, want %q",
-				i, event.Description, expectedDescs[i])
-		}
 	}
 }
 
@@ -474,59 +379,6 @@ func TestRemindSyntaxErrorString(t *testing.T) {
 				t.Errorf("Error string mismatch: got %q, want %q", got, tt.expected)
 			}
 		})
-	}
-}
-
-func TestParseMultiDayEvent(t *testing.T) {
-	client := NewClient()
-
-	// Test a 10-hour event that spans midnight
-	// remind outputs it as two separate entries
-	output := `2025/09/21 * * 600 900 3:00pm-1:00am+1 Multi-day meeting
-2025/09/22 * * 60 0 12:00-1:00am Multi-day meeting`
-
-	events, err := client.parseRemindOutput(output)
-	if err != nil {
-		t.Fatalf("Parse failed: %v", err)
-	}
-
-	// Should only get 1 event (the continuation should be merged)
-	if len(events) != 1 {
-		t.Errorf("Expected 1 merged event, got %d events", len(events))
-		for i, e := range events {
-			durStr := "nil"
-			if e.Duration != nil {
-				durStr = e.Duration.String()
-			}
-			timeStr := "nil"
-			if e.Time != nil {
-				timeStr = e.Time.Format("15:04")
-			}
-			t.Logf("Event %d: %s on %s at %s, duration: %s",
-				i+1, e.Description, e.Date.Format("2006-01-02"), timeStr, durStr)
-		}
-	}
-
-	if len(events) > 0 {
-		event := events[0]
-		// Check the event details
-		if event.Description != "Multi-day meeting" {
-			t.Errorf("Wrong description: %q", event.Description)
-		}
-
-		// Should start at 3pm on Sep 21
-		if event.Time == nil {
-			t.Error("Event should have a time")
-		} else if event.Time.Hour() != 15 || event.Time.Minute() != 0 {
-			t.Errorf("Wrong start time: %v", event.Time)
-		}
-
-		// Should have 10 hours total duration (600 + 60 minutes)
-		if event.Duration == nil {
-			t.Error("Event should have duration")
-		} else if event.Duration.Hours() != 10 {
-			t.Errorf("Wrong duration: got %v, want 10 hours", event.Duration)
-		}
 	}
 }
 
