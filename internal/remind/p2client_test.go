@@ -164,54 +164,67 @@ EOF
 		t.Fatalf("Failed to create mock script: %v", err)
 	}
 
-	// Create P2 client with mock
-	client := NewP2Client()
-	client.P2Path = mockScript
-	client.SetFiles([]string{"dummy.rec"})
+	for _, loc := range testZones {
+		t.Run(loc.String(), func(t *testing.T) {
+			// Create P2 client with mock
+			client := NewP2Client()
+			client.P2Path = mockScript
+			client.SetFiles([]string{"dummy.rec"})
+			client.Timezone = loc
 
-	// Get events for a specific date
-	start := time.Date(2025, 8, 21, 0, 0, 0, 0, time.Local)
-	end := time.Date(2025, 8, 21, 23, 59, 59, 0, time.Local)
+			// Get events for a specific date
+			start := time.Date(2025, 8, 21, 0, 0, 0, 0, loc)
+			end := time.Date(2025, 8, 21, 23, 59, 59, 0, loc)
 
-	events, err := client.GetEvents(start, end)
-	if err != nil {
-		t.Fatalf("Failed to get events: %v", err)
-	}
-
-	// Should get 3 events for Aug 21 (not the future one on Aug 22)
-	if len(events) != 3 {
-		t.Errorf("Expected 3 events, got %d", len(events))
-		for i, e := range events {
-			t.Logf("Event %d: %s (date=%s, time=%v)",
-				i, e.Description, e.Date.Format("2006-01-02"),
-				e.Time)
-		}
-	}
-
-	// Check that events have correct structure
-	foundPartial := false
-	foundComplete := false
-	for _, event := range events {
-		if containsTag(event.Tags, "PARTIAL") {
-			foundPartial = true
-			// Check that partial task has hours indicator in description
-			if event.Description == "Test Task 1 (2.0/4.0h)" {
-				// Expected format
-			} else {
-				t.Errorf("Partial task has incorrect description: %s", event.Description)
+			events, err := client.GetEvents(start, end)
+			if err != nil {
+				t.Fatalf("Failed to get events: %v", err)
 			}
-		}
-		if event.Description == "Test Task 2" && !containsTag(event.Tags, "PARTIAL") {
-			foundComplete = true
-		}
-	}
 
-	if !foundPartial {
-		t.Error("Expected to find a partial work period")
+			// Should get 3 events for Aug 21 (not the future one on Aug 22)
+			if len(events) != 3 {
+				t.Errorf("Expected 3 events, got %d", len(events))
+				for i, e := range events {
+					t.Logf("Event %d: %s (date=%s, time=%v)",
+						i, e.Description, e.Date.Format("2006-01-02"),
+						e.Time)
+				}
+			}
+
+			// Check that events have correct structure
+			foundPartial := false
+			foundComplete := false
+			for _, event := range events {
+				if containsTag(event.Tags, "PARTIAL") {
+					foundPartial = true
+					// Check that partial task has hours indicator in description
+					if event.Description == "Test Task 1 (2.0/4.0h)" {
+						// Expected format
+					} else {
+						t.Errorf("Partial task has incorrect description: %s", event.Description)
+					}
+				}
+				if event.Description == "Test Task 2" && !containsTag(event.Tags, "PARTIAL") {
+					foundComplete = true
+				}
+			}
+
+			if !foundPartial {
+				t.Error("Expected to find a partial work period")
+			}
+			if !foundComplete {
+				t.Error("Expected to find a complete work period")
+			}
+		})
 	}
-	if !foundComplete {
-		t.Error("Expected to find a complete work period")
-	}
+}
+
+// testZones are the zones the mock p2 tests run in. The mock work periods are
+// at -05:00 and fall on the same day in each of these zones.
+var testZones = []*time.Location{
+	time.FixedZone("UTC-7", -7*60*60),
+	time.FixedZone("UTC-5", -5*60*60),
+	time.UTC,
 }
 
 func TestP2ClientJSONParsing(t *testing.T) {
@@ -251,28 +264,78 @@ EOF
 		t.Fatalf("Failed to create mock script: %v", err)
 	}
 
+	for _, loc := range testZones {
+		t.Run(loc.String(), func(t *testing.T) {
+			client := NewP2Client()
+			client.P2Path = mockScript
+			client.SetFiles([]string{"dummy.rec"})
+			client.Timezone = loc
+
+			// Test: Get only Day 2 events
+			start := time.Date(2025, 8, 21, 0, 0, 0, 0, loc)
+			end := time.Date(2025, 8, 21, 23, 59, 59, 0, loc)
+
+			events, err := client.GetEvents(start, end)
+			if err != nil {
+				t.Fatalf("Failed to get events: %v", err)
+			}
+
+			if len(events) != 1 {
+				t.Errorf("Expected 1 event for Day 2, got %d", len(events))
+				for _, e := range events {
+					t.Logf("Event: %s on %s", e.Description, e.Date.Format("2006-01-02"))
+				}
+			}
+
+			if len(events) > 0 && events[0].Description != "Day 2 All Day" {
+				t.Errorf("Expected 'Day 2 All Day', got '%s'", events[0].Description)
+			}
+		})
+	}
+}
+
+func TestP2ClientPlacesWorkPeriodsOnTheDayInItsTimezone(t *testing.T) {
+	mockScript := filepath.Join(t.TempDir(), "mock_p2")
+	mockContent := `#!/bin/sh
+cat <<EOF
+{"task_id":"1","task_name":"Late Evening","package_id":"test","start":"2025-08-20T20:00:00-05:00","end":"2025-08-20T21:00:00-05:00","hours":1.0,"is_complete":true,"total_hours":1.0}
+EOF
+`
+	if err := os.WriteFile(mockScript, []byte(mockContent), 0755); err != nil {
+		t.Fatalf("Failed to create mock script: %v", err)
+	}
+
+	tokyo := time.FixedZone("UTC+9", 9*60*60)
 	client := NewP2Client()
 	client.P2Path = mockScript
 	client.SetFiles([]string{"dummy.rec"})
+	client.Timezone = tokyo
 
-	// Test: Get only Day 2 events
-	start := time.Date(2025, 8, 21, 0, 0, 0, 0, time.Local)
-	end := time.Date(2025, 8, 21, 23, 59, 59, 0, time.Local)
-
-	events, err := client.GetEvents(start, end)
-	if err != nil {
-		t.Fatalf("Failed to get events: %v", err)
-	}
-
-	if len(events) != 1 {
-		t.Errorf("Expected 1 event for Day 2, got %d", len(events))
-		for _, e := range events {
-			t.Logf("Event: %s on %s", e.Description, e.Date.Format("2006-01-02"))
+	// 20:00 on Aug 20 at -05:00 is 10:00 on Aug 21 at +09:00
+	for _, tc := range []struct {
+		day  int
+		want int
+	}{{20, 0}, {21, 1}} {
+		start := time.Date(2025, 8, tc.day, 0, 0, 0, 0, tokyo)
+		end := time.Date(2025, 8, tc.day, 23, 59, 59, 0, tokyo)
+		events, err := client.GetEvents(start, end)
+		if err != nil {
+			t.Fatalf("Failed to get events: %v", err)
 		}
-	}
-
-	if len(events) > 0 && events[0].Description != "Day 2 All Day" {
-		t.Errorf("Expected 'Day 2 All Day', got '%s'", events[0].Description)
+		if len(events) != tc.want {
+			t.Fatalf("Aug %d: got %d events, want %d", tc.day, len(events), tc.want)
+		}
+		if tc.want == 0 {
+			continue
+		}
+		wantDate := time.Date(2025, 8, 21, 0, 0, 0, 0, tokyo)
+		if !events[0].Date.Equal(wantDate) {
+			t.Errorf("Date = %v, want %v", events[0].Date, wantDate)
+		}
+		wantTime := time.Date(2025, 8, 21, 10, 0, 0, 0, tokyo)
+		if events[0].Time == nil || !events[0].Time.Equal(wantTime) || events[0].Time.Location() != tokyo {
+			t.Errorf("Time = %v, want %v", events[0].Time, wantTime)
+		}
 	}
 }
 

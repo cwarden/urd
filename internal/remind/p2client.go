@@ -26,6 +26,9 @@ type P2Client struct {
 	P2Path    string // Path to p2 binary
 	TasksFile string // Path to tasks.rec file
 	ShowAll   bool   // Show all periods (not currently used with work command)
+	// Timezone is the zone work periods are shown in, which determines the
+	// day each one falls on.
+	Timezone  *time.Location
 	watcher   *FileWatcher
 	eventChan chan FileChangeEvent
 }
@@ -36,6 +39,7 @@ func NewP2Client() *P2Client {
 		P2Path:    "p2",
 		TasksFile: "tasks.rec",
 		ShowAll:   false,
+		Timezone:  time.Local,
 	}
 }
 
@@ -76,12 +80,8 @@ func (c *P2Client) GetEvents(start, end time.Time) ([]Event, error) {
 		// Convert P2 work period to Event
 		event := c.workPeriodToEvent(period)
 
-		// Filter by date range
-		// Check if the work period's start date falls within the requested date range
-		periodDate := time.Date(period.Start.Year(), period.Start.Month(), period.Start.Day(), 0, 0, 0, 0, period.Start.Location())
-
-		// Skip if the period's date is outside the requested range
-		if periodDate.Before(start) || periodDate.After(end) {
+		// Skip periods whose day falls outside the requested range
+		if event.Date.Before(start) || event.Date.After(end) {
 			continue
 		}
 
@@ -106,6 +106,12 @@ func (c *P2Client) workPeriodToEvent(period P2WorkPeriod) Event {
 		description = fmt.Sprintf("%s (%.1f/%.1fh)", period.TaskName, period.Hours, period.TotalHours)
 	}
 
+	loc := c.Timezone
+	if loc == nil {
+		loc = time.Local
+	}
+	periodStart := period.Start.In(loc)
+
 	event := Event{
 		ID:          periodID,
 		Description: description,
@@ -114,9 +120,9 @@ func (c *P2Client) workPeriodToEvent(period P2WorkPeriod) Event {
 		Priority:    PriorityNone,
 		Tags:        []string{},
 		// Set the date to midnight of the work period's day
-		Date: time.Date(period.Start.Year(), period.Start.Month(), period.Start.Day(), 0, 0, 0, 0, period.Start.Location()),
+		Date: time.Date(periodStart.Year(), periodStart.Month(), periodStart.Day(), 0, 0, 0, 0, loc),
 		// Set the actual start time
-		Time: &period.Start,
+		Time: &periodStart,
 	}
 
 	// Calculate duration from start to end
