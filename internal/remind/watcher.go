@@ -8,11 +8,22 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
+// FileWatcher reports changes to a set of files. It watches the directory
+// containing each file rather than the file itself: an inotify watch on a
+// file is removed when the file is replaced by a rename, which is how many
+// editors and tools (sed -i, rsync, sync clients) save, so a watch on the
+// file would stop reporting after the first such save.
 type FileWatcher struct {
-	watcher  *fsnotify.Watcher
-	files    map[string]time.Time
+	watcher *fsnotify.Watcher
+	// files maps each watched path to the path passed to AddFile, which is
+	// the path reported to onChange. A symlink is watched at both its own
+	// path and its target's path.
+	files map[string]string
+	// dirs counts the watched paths in each watched directory.
+	dirs     map[string]int
 	onChange func(string)
-	mu       sync.RWMutex
+	mu       sync.Mutex
+	debounce map[string]*time.Timer
 	done     chan struct{}
 }
 
@@ -24,8 +35,10 @@ func NewFileWatcher(onChange func(string)) (*FileWatcher, error) {
 
 	fw := &FileWatcher{
 		watcher:  watcher,
-		files:    make(map[string]time.Time),
+		files:    make(map[string]string),
+		dirs:     make(map[string]int),
 		onChange: onChange,
+		debounce: make(map[string]*time.Timer),
 		done:     make(chan struct{}),
 	}
 
@@ -33,8 +46,22 @@ func NewFileWatcher(onChange func(string)) (*FileWatcher, error) {
 	return fw, nil
 }
 
-func (fw *FileWatcher) AddFile(path string) error {
+// watchPaths returns the paths to watch for path: its absolute path and, when
+// it is a symlink, the absolute path of its target.
+func watchPaths(path string) ([]string, error) {
 	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{absPath}
+	if target, err := filepath.EvalSymlinks(absPath); err == nil && target != absPath {
+		paths = append(paths, target)
+	}
+	return paths, nil
+}
+
+func (fw *FileWatcher) AddFile(path string) error {
+	paths, err := watchPaths(path)
 	if err != nil {
 		return err
 	}
@@ -42,21 +69,24 @@ func (fw *FileWatcher) AddFile(path string) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
-	if _, exists := fw.files[absPath]; exists {
-		return nil // Already watching
+	for _, p := range paths {
+		if _, exists := fw.files[p]; exists {
+			continue
+		}
+		dir := filepath.Dir(p)
+		if fw.dirs[dir] == 0 {
+			if err := fw.watcher.Add(dir); err != nil {
+				return err
+			}
+		}
+		fw.dirs[dir]++
+		fw.files[p] = path
 	}
-
-	err = fw.watcher.Add(absPath)
-	if err != nil {
-		return err
-	}
-
-	fw.files[absPath] = time.Now()
 	return nil
 }
 
 func (fw *FileWatcher) RemoveFile(path string) error {
-	absPath, err := filepath.Abs(path)
+	paths, err := watchPaths(path)
 	if err != nil {
 		return err
 	}
@@ -64,56 +94,64 @@ func (fw *FileWatcher) RemoveFile(path string) error {
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 
-	if _, exists := fw.files[absPath]; !exists {
-		return nil // Not watching
+	for _, p := range paths {
+		if _, exists := fw.files[p]; !exists {
+			continue
+		}
+		delete(fw.files, p)
+		dir := filepath.Dir(p)
+		fw.dirs[dir]--
+		if fw.dirs[dir] == 0 {
+			delete(fw.dirs, dir)
+			if err := fw.watcher.Remove(dir); err != nil {
+				return err
+			}
+		}
 	}
-
-	err = fw.watcher.Remove(absPath)
-	if err != nil {
-		return err
-	}
-
-	delete(fw.files, absPath)
 	return nil
 }
 
 func (fw *FileWatcher) watch() {
-	debounce := make(map[string]*time.Timer)
-
 	for {
 		select {
 		case event, ok := <-fw.watcher.Events:
 			if !ok {
 				return
 			}
-
-			if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
-				// Debounce rapid events
-				if timer, exists := debounce[event.Name]; exists {
-					timer.Stop()
-				}
-
-				debounce[event.Name] = time.AfterFunc(100*time.Millisecond, func() {
-					fw.mu.RLock()
-					if _, watching := fw.files[event.Name]; watching {
-						fw.mu.RUnlock()
-						if fw.onChange != nil {
-							fw.onChange(event.Name)
-						}
-					} else {
-						fw.mu.RUnlock()
-					}
-
-					delete(debounce, event.Name)
-				})
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename|fsnotify.Remove) == 0 {
+				continue
 			}
 
-		case err, ok := <-fw.watcher.Errors:
+			fw.mu.Lock()
+			reported, watching := fw.files[event.Name]
+			if !watching {
+				fw.mu.Unlock()
+				continue
+			}
+			// A save produces several events (truncate and write, or create
+			// and rename), so report once after they stop arriving.
+			if timer, exists := fw.debounce[reported]; exists {
+				timer.Stop()
+			}
+			fw.debounce[reported] = time.AfterFunc(100*time.Millisecond, func() {
+				fw.mu.Lock()
+				delete(fw.debounce, reported)
+				fw.mu.Unlock()
+				select {
+				case <-fw.done:
+					return
+				default:
+				}
+				if fw.onChange != nil {
+					fw.onChange(reported)
+				}
+			})
+			fw.mu.Unlock()
+
+		case _, ok := <-fw.watcher.Errors:
 			if !ok {
 				return
 			}
-			// Log error but continue watching
-			_ = err
 
 		case <-fw.done:
 			return
@@ -123,5 +161,10 @@ func (fw *FileWatcher) watch() {
 
 func (fw *FileWatcher) Close() error {
 	close(fw.done)
+	fw.mu.Lock()
+	for _, timer := range fw.debounce {
+		timer.Stop()
+	}
+	fw.mu.Unlock()
 	return fw.watcher.Close()
 }

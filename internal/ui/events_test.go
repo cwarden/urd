@@ -349,18 +349,44 @@ func TestCacheIsStale(t *testing.T) {
 
 	m := &Model{config: &config.Config{RemindFiles: []string{path}}}
 	now := time.Now()
+	build := func() {
+		m.cacheTime = now.Add(-time.Minute)
+		m.sourceStamps = m.statSourceFiles()
+	}
 
-	m.cacheTime = now.Add(-time.Minute)
+	build()
 	if m.cacheIsStale(now) {
 		t.Errorf("unchanged file and same day reported stale")
 	}
 
-	m.cacheTime = now.Add(-2 * time.Hour)
+	if err := os.Chtimes(path, now, now); err != nil {
+		t.Fatal(err)
+	}
 	if !m.cacheIsStale(now) {
-		t.Errorf("file modified after cacheTime not reported stale")
+		t.Errorf("file with a newer modification time not reported stale")
 	}
 
-	m.cacheTime = now.Add(-time.Minute)
+	build()
+	older := old.Add(-time.Hour)
+	if err := os.WriteFile(path, []byte("REM 2 Jan MSG replaced\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(path, older, older); err != nil {
+		t.Fatal(err)
+	}
+	if !m.cacheIsStale(now) {
+		t.Errorf("file replaced with an older modification time not reported stale")
+	}
+
+	build()
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if !m.cacheIsStale(now) {
+		t.Errorf("removed file not reported stale")
+	}
+
+	build()
 	if !m.cacheIsStale(now.AddDate(0, 0, 1)) {
 		t.Errorf("day rollover not reported stale")
 	}

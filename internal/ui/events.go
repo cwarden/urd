@@ -114,6 +114,7 @@ func (m *Model) reloadEvents() tea.Cmd {
 	m.cacheGen++
 	m.liveGen.Store(int64(m.cacheGen))
 	m.cacheTime = time.Now()
+	m.sourceStamps = m.statSourceFiles()
 	return m.ensureEventsLoaded()
 }
 
@@ -125,6 +126,7 @@ func (m *Model) loadMonthNow(key monthKey) {
 	}
 	if m.cacheTime.IsZero() {
 		m.cacheTime = time.Now()
+		m.sourceStamps = m.statSourceFiles()
 	}
 	m.applyEventLoaded(fetchMonth(m.source, key, m.cacheGen))
 }
@@ -232,9 +234,33 @@ func (m *Model) sourceFiles() []string {
 	return nil
 }
 
+// fileStamp is the modification time and size of a source file, or the zero
+// value when the file could not be read.
+type fileStamp struct {
+	modTime time.Time
+	size    int64
+}
+
+// statSourceFiles returns the current stamp of each source file.
+func (m *Model) statSourceFiles() map[string]fileStamp {
+	stamps := make(map[string]fileStamp)
+	for _, path := range m.sourceFiles() {
+		var stamp fileStamp
+		if info, err := os.Stat(path); err == nil {
+			stamp = fileStamp{modTime: info.ModTime(), size: info.Size()}
+		}
+		stamps[path] = stamp
+	}
+	return stamps
+}
+
 // cacheIsStale reports whether the periodic refresh should discard the cache:
-// a source file was modified after the cache was built, or the calendar day
-// has changed since then, which moves reminders that depend on today's date.
+// a source file's modification time or size differs from when the cache was
+// built, or the calendar day has changed since then, which moves reminders
+// that depend on today's date. The modification time is compared for
+// equality rather than against the cache time because a file replaced by a
+// copy that keeps its original time (rsync -t, cp -p, sync clients) can have
+// a modification time older than the cache.
 func (m *Model) cacheIsStale(now time.Time) bool {
 	if m.cacheTime.IsZero() {
 		return true
@@ -242,12 +268,13 @@ func (m *Model) cacheIsStale(now time.Time) bool {
 	if now.Year() != m.cacheTime.Year() || now.YearDay() != m.cacheTime.YearDay() {
 		return true
 	}
-	for _, path := range m.sourceFiles() {
-		info, err := os.Stat(path)
-		if err != nil {
-			continue
-		}
-		if info.ModTime().After(m.cacheTime) {
+	current := m.statSourceFiles()
+	if len(current) != len(m.sourceStamps) {
+		return true
+	}
+	for path, stamp := range current {
+		saved, ok := m.sourceStamps[path]
+		if !ok || !saved.modTime.Equal(stamp.modTime) || saved.size != stamp.size {
 			return true
 		}
 	}

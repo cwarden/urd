@@ -125,8 +125,10 @@ set time_format 24:00
 set date_format Jan 2, 2006
 
 # Behavior
-# The periodic refresh re-runs remind only when a remind file has been
-# modified since the last load or the calendar day has changed.
+# The periodic refresh re-runs remind only when a remind file's modification
+# time or size differs from the last load or the calendar day has changed.
+# Changes are normally picked up sooner by watching the directory of each
+# remind file, which also catches files replaced by a rename.
 set auto_refresh true
 set refresh_rate 30
 set confirm_delete true

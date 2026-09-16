@@ -57,15 +57,18 @@ type Model struct {
 
 	// Event cache, one entry per calendar month. cacheGen increases when the
 	// cache is invalidated; entries and in-flight fetches from an older
-	// generation are ignored. cacheTime is when the current generation began.
+	// generation are ignored. cacheTime is when the current generation began,
+	// and sourceStamps holds the source files' modification times and sizes
+	// at that point.
 	eventCache   map[monthKey]cachedMonth
 	pendingFetch map[monthKey]int
 	cacheGen     int
 	// liveGen mirrors cacheGen for fetch commands, which run outside Update
 	// and skip their query when a reload has made them stale.
-	liveGen   atomic.Int64
-	cacheTime time.Time
-	watchChan <-chan remind.FileChangeEvent
+	liveGen      atomic.Int64
+	cacheTime    time.Time
+	sourceStamps map[string]fileStamp
+	watchChan    <-chan remind.FileChangeEvent
 
 	// Hourly view state
 	selectedSlot  int // Selected time slot index (can span multiple days)
