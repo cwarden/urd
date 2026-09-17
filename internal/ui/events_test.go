@@ -283,10 +283,12 @@ func TestFileChangedMsgReloadsAndKeepsWatching(t *testing.T) {
 	src := &fakeSource{events: map[monthKey][]remind.Event{}}
 	m := newCacheTestModel(src, sep)
 	runCmd(t, m, m.ensureEventsLoaded())
+	file := stampedFile(t, m)
+	appendLine(t, file, "REM 20 Sep 2026 MSG Added\n")
 
 	ch := make(chan remind.FileChangeEvent)
 	m.watchChan = ch
-	_, cmd := m.Update(fileChangedMsg{path: "x.rem"})
+	_, cmd := m.Update(fileChangedMsg{path: file})
 
 	// Close the channel so the re-issued watch command returns nil instead
 	// of blocking; the remaining commands are the month fetches.
@@ -469,5 +471,86 @@ func TestFetchStartedBeforeAReloadSkipsTheQuery(t *testing.T) {
 	}
 	if msg.gen == m.cacheGen {
 		t.Errorf("stale fetch reported the current generation %d", msg.gen)
+	}
+}
+
+// stampedFile creates a reminder file, makes it the model's only source
+// file and records its stamp as the last reload would have.
+func stampedFile(t *testing.T, m *Model) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), "cal.rem")
+	if err := os.WriteFile(file, []byte("REM 1 Sep 2026 MSG First\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.config.RemindFiles = []string{file}
+	m.sourceStamps = m.statSourceFiles()
+	return file
+}
+
+func appendLine(t *testing.T, file, line string) {
+	t.Helper()
+	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString(line); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+}
+
+// countFetches runs cmd and returns how many month fetches it performed.
+func countFetches(t *testing.T, m *Model, src *fakeSource, cmd tea.Cmd) int {
+	t.Helper()
+	before := src.callCount()
+	runCmd(t, m, cmd)
+	return src.callCount() - before
+}
+
+func TestFileChangedMsgSkipsReloadWhenTheLastReloadReadTheChange(t *testing.T) {
+	sep := time.Date(2026, time.September, 15, 0, 0, 0, 0, time.Local)
+	src := &fakeSource{events: map[monthKey][]remind.Event{}}
+	m := newCacheTestModel(src, sep)
+	runCmd(t, m, m.ensureEventsLoaded())
+	stampedFile(t, m)
+
+	_, cmd := m.Update(fileChangedMsg{path: "cal.rem"})
+	if n := countFetches(t, m, src, cmd); n != 0 {
+		t.Errorf("%d fetches for a change the stamps already cover, want 0", n)
+	}
+}
+
+func TestReloadsWaitWhileTheEditorRuns(t *testing.T) {
+	sep := time.Date(2026, time.September, 15, 0, 0, 0, 0, time.Local)
+	src := &fakeSource{events: map[monthKey][]remind.Event{}}
+	m := newCacheTestModel(src, sep)
+	runCmd(t, m, m.ensureEventsLoaded())
+	file := stampedFile(t, m)
+	m.config.EditOldCommand = "true %file%"
+
+	m.editCmd(m.config.EditOldCommand, file, 1)
+	if !m.editing {
+		t.Fatal("launching the editor did not mark the model as editing")
+	}
+	appendLine(t, file, "REM 20 Sep 2026 MSG Added\n")
+
+	// A reload advances the cache generation. The tick command returned
+	// with these messages is a timer, so it is not run.
+	gen := m.cacheGen
+	m.Update(fileChangedMsg{path: file})
+	if m.cacheGen != gen {
+		t.Error("a file change during editing started a reload")
+	}
+	m.Update(tickMsg{})
+	if m.cacheGen != gen {
+		t.Error("a tick during editing started a reload")
+	}
+
+	_, cmd := m.Update(editorFinishedMsg{file: file, line: 1})
+	if m.editing {
+		t.Error("the editor's exit did not clear editing")
+	}
+	if n := countFetches(t, m, src, cmd); n != 3 {
+		t.Errorf("%d fetches after the editor exited, want 3", n)
 	}
 }

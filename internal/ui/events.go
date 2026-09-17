@@ -280,3 +280,121 @@ func (m *Model) cacheIsStale(now time.Time) bool {
 	}
 	return false
 }
+
+// lineParsedMsg carries the events remind produced for the line an editor
+// was opened at, run on its own while the whole file is reloaded. gen is the
+// cache generation of that reload.
+type lineParsedMsg struct {
+	gen    int
+	file   string
+	line   int
+	events []remind.Event
+	err    error
+}
+
+// reloadAfterEdit reloads every visible month after an editor session and,
+// at the same time, runs the line the editor was opened at through remind
+// by itself. That line is assumed to be the one that changed. Its events
+// are usually ready long before the whole file has been read, so they go on
+// screen first; the full reload then replaces them. With the built-in
+// remind, runs cannot overlap, so the full reload starts once the line has
+// been parsed rather than competing with it for the next run.
+func (m *Model) reloadAfterEdit(file string, line int) tea.Cmd {
+	reload := m.reloadEvents()
+	if m.remindClient == nil || file == "" {
+		return reload
+	}
+	client, gen := m.remindClient, m.cacheGen
+	months := m.visibleMonths()
+	done := make(chan struct{})
+	parse := func() tea.Msg {
+		defer close(done)
+		events, err := client.LineEvents(file, line, months[0].start(), len(months))
+		return lineParsedMsg{gen: gen, file: file, line: line, events: events, err: err}
+	}
+	if reload != nil && client.SerializesRuns() {
+		full := reload
+		reload = func() tea.Msg {
+			<-done
+			return full()
+		}
+	}
+	return tea.Batch(parse, reload)
+}
+
+// applyLineParsed puts the events of one parsed line into the cached months
+// that the full reload started with it has not replaced yet: those still
+// holding an older generation. A month that reload has already refreshed
+// holds the events of the whole file, which are at least as accurate, so it
+// is left alone. A parse error is ignored; the full reload reports it.
+func (m *Model) applyLineParsed(msg lineParsedMsg) {
+	if msg.err != nil {
+		return
+	}
+	// The line's events are replaced by line number. The reminder may have
+	// grown or shrunk by continuation lines, so both the line the editor
+	// opened and the line remind now reports are replaced.
+	lines := map[int]bool{}
+	if msg.line > 0 {
+		lines[msg.line] = true
+	}
+	byMonth := make(map[monthKey][]remind.Event)
+	for _, e := range msg.events {
+		lines[e.LineNumber] = true
+		key := monthKeyFor(e.Date)
+		byMonth[key] = append(byMonth[key], e)
+	}
+	changed := false
+	for _, key := range m.visibleMonths() {
+		c, ok := m.eventCache[key]
+		if !ok || c.gen >= msg.gen {
+			continue
+		}
+		var kept []remind.Event
+		for _, e := range c.events {
+			if e.Filename == msg.file && lines[e.LineNumber] {
+				continue
+			}
+			kept = append(kept, e)
+		}
+		c.events = append(kept, byMonth[key]...)
+		m.eventCache[key] = c
+		changed = true
+	}
+	if changed {
+		m.rebuildEvents()
+	}
+}
+
+// removeLineEvents drops the events of the reminder on event's line from
+// every cached month and moves the events of later lines in the same file up
+// by one line, which is what deleting the line did to the file. The cache
+// then matches the file until the next reload replaces it.
+func (m *Model) removeLineEvents(event remind.Event) {
+	file := event.Filename
+	if file == "" {
+		if files := m.sourceFiles(); len(files) > 0 {
+			file = files[0]
+		}
+	}
+	for key, c := range m.eventCache {
+		var kept []remind.Event
+		for _, e := range c.events {
+			switch {
+			case event.LineNumber <= 0:
+				if e.ID == event.ID {
+					continue
+				}
+			case e.Filename == file && e.LineNumber == event.LineNumber:
+				continue
+			case e.Filename == file && e.LineNumber > event.LineNumber:
+				e.LineNumber--
+				e.ID = remind.EventID(e.Date, e.LineNumber)
+			}
+			kept = append(kept, e)
+		}
+		c.events = kept
+		m.eventCache[key] = c
+	}
+	m.rebuildEvents()
+}

@@ -84,6 +84,10 @@ type Model struct {
 	showEventIDs bool
 
 	// Editor state
+	// editing is true while an external editor runs. The reload that follows
+	// the editor's exit covers any file change made meanwhile, so reloads
+	// prompted by the watcher or the periodic check wait for it.
+	editing      bool
 	editingEvent *remind.Event
 	inputBuffer  string
 	cursorPos    int
@@ -225,7 +229,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.config.AutoRefresh {
 			return m, nil
 		}
-		if m.cacheIsStale(time.Now()) {
+		if !m.editing && m.cacheIsStale(time.Now()) {
 			return m, tea.Batch(m.reloadEvents(), m.tickCmd())
 		}
 		return m, m.tickCmd()
@@ -240,6 +244,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case fileChangedMsg:
+		// A change the last reload already read leaves the files' stamps as
+		// that reload recorded them, so it needs no reload. Starting one
+		// anyway would hold the built-in remind for a full run while the
+		// edited line waits to be parsed.
+		if m.editing || !m.cacheIsStale(time.Now()) {
+			return m, waitForFileChange(m.watchChan)
+		}
 		return m, tea.Batch(m.reloadEvents(), waitForFileChange(m.watchChan))
 
 	case messageTimeoutMsg:
@@ -247,13 +258,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case editorFinishedMsg:
+		m.editing = false
 		if msg.err != nil {
 			m.showMessage(fmt.Sprintf("Editor failed: %v", msg.err))
 		} else {
 			m.showMessage("Editor session completed")
 		}
-		// Reload events after editing
-		return m, m.reloadEvents()
+		return m, m.reloadAfterEdit(msg.file, msg.line)
+
+	case lineParsedMsg:
+		m.applyLineParsed(msg)
+		return m, nil
+
+	case urlOpenedMsg:
+		if msg.err != nil {
+			m.showMessage(fmt.Sprintf("Failed to open URL: %v", msg.err))
+		}
+		return m, nil
 	}
 
 	return m, nil
@@ -1069,24 +1090,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					m.events[i].Date.Year() == selectedDate.Year() &&
 					m.events[i].Date.YearDay() == selectedDate.YearDay() {
 					if eventIndex == m.selectedUntimedIndex {
-						// Store in clipboard
-						m.clipboardEvent = &m.events[i]
-						m.clipboardCut = true
-
-						// Immediately remove from file
-						if m.remindClient == nil {
-							m.showMessage("Cannot remove events: remind client not available")
-							return m, nil
-						}
-						if err := m.remindClient.RemoveEvent(m.events[i]); err != nil {
-							m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
-							m.clipboardEvent = nil
-							m.clipboardCut = false
-						} else {
-							m.showMessage("Event cut to clipboard")
-							// Reload events to show the change
-							cmd = m.reloadEvents()
-						}
+						cmd = m.cutEvent(m.events[i])
 						break
 					}
 					eventIndex++
@@ -1098,24 +1102,7 @@ func (m *Model) handleHourlyKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if len(events) == 0 {
 				m.showMessage("No event at current time to cut")
 			} else if len(events) == 1 {
-				// Single event - cut directly
-				m.clipboardEvent = &events[0]
-				m.clipboardCut = true
-
-				// Immediately remove from file
-				if m.remindClient == nil {
-					m.showMessage("Cannot remove events: remind client not available")
-					return m, nil
-				}
-				if err := m.remindClient.RemoveEvent(events[0]); err != nil {
-					m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
-					m.clipboardEvent = nil
-					m.clipboardCut = false
-				} else {
-					m.showMessage("Event cut to clipboard")
-					// Reload events to show the change
-					cmd = m.reloadEvents()
-				}
+				cmd = m.cutEvent(events[0])
 			} else {
 				// Multiple events - show selector
 				m.eventChoices = events
@@ -1524,14 +1511,15 @@ func (m *Model) handleEditorKeys(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			}
 			lineNumber, err := m.remindClient.AddQuickEvent(m.inputBuffer)
 			if err == nil {
-				m.showMessage("Event added - launching editor...")
 				m.mode = ViewHourly
-				cmd = m.reloadEvents()
-
-				// Launch editor for the newly created event
+				// The reload after the editor exits picks up the new event;
+				// one started now would only delay it.
 				if len(m.config.RemindFiles) > 0 {
-					return m, tea.Batch(cmd, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber))
+					m.showMessage("Event added - launching editor...")
+					return m, m.editCmd(m.config.EditOldCommand, m.config.RemindFiles[0], lineNumber)
 				}
+				m.showMessage("Event added")
+				cmd = m.reloadEvents()
 			} else {
 				m.showMessage(fmt.Sprintf("Error: %v", err))
 			}
@@ -1775,22 +1763,7 @@ func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea
 				m.clipboardCut = false
 				m.showMessage("Event copied to clipboard")
 			} else if m.clipboardOperation == "cut" {
-				// Cut the selected event
-				m.clipboardEvent = &event
-				m.clipboardCut = true
-
-				// Immediately remove from file
-				if m.remindClient == nil {
-					m.showMessage("Cannot remove events: remind client not available")
-				} else if err := m.remindClient.RemoveEvent(event); err != nil {
-					m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
-					m.clipboardEvent = nil
-					m.clipboardCut = false
-				} else {
-					m.showMessage("Event cut to clipboard")
-					// Reload events to show the change
-					cmd = m.reloadEvents()
-				}
+				cmd = m.cutEvent(event)
 			}
 
 			// Return to hourly view
@@ -1816,22 +1789,7 @@ func (m *Model) handleClipboardSelectorKeys(msg tea.KeyPressMsg) (tea.Model, tea
 				m.clipboardCut = false
 				m.showMessage("Event copied to clipboard")
 			} else if m.clipboardOperation == "cut" {
-				// Cut the selected event
-				m.clipboardEvent = &event
-				m.clipboardCut = true
-
-				// Immediately remove from file
-				if m.remindClient == nil {
-					m.showMessage("Cannot remove events: remind client not available")
-				} else if err := m.remindClient.RemoveEvent(event); err != nil {
-					m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
-					m.clipboardEvent = nil
-					m.clipboardCut = false
-				} else {
-					m.showMessage("Event cut to clipboard")
-					// Reload events to show the change
-					cmd = m.reloadEvents()
-				}
+				cmd = m.cutEvent(event)
 			}
 
 			// Return to hourly view
@@ -2194,6 +2152,26 @@ func (m *Model) getEventsAtSlot(slot int) []remind.Event {
 	return events
 }
 
+// cutEvent puts event on the clipboard and deletes its line from the
+// reminder file. The line's events leave the display at once; the command
+// returned reloads the rest of the file in the background.
+func (m *Model) cutEvent(event remind.Event) tea.Cmd {
+	if m.remindClient == nil {
+		m.showMessage("Cannot remove events: remind client not available")
+		return nil
+	}
+	if err := m.remindClient.RemoveEvent(event); err != nil {
+		m.showMessage(fmt.Sprintf("Failed to cut event: %v", err))
+		return nil
+	}
+	cut := event
+	m.clipboardEvent = &cut
+	m.clipboardCut = true
+	m.showMessage("Event cut to clipboard")
+	m.removeLineEvents(event)
+	return m.reloadEvents()
+}
+
 // findEventFile attempts to locate which remind file contains the given event
 func (m *Model) findEventFile(event remind.Event) (string, error) {
 	if len(m.config.RemindFiles) == 0 {
@@ -2405,10 +2383,11 @@ func (m *Model) editCmd(command, filePath string, lineNumber int) tea.Cmd {
 
 	// Create the command
 	cmd := exec.Command(parts[0], parts[1:]...)
+	m.editing = true
 
 	// Use tea.ExecProcess for proper terminal handling
 	return tea.ExecProcess(cmd, func(err error) tea.Msg {
-		return editorFinishedMsg{err: err}
+		return editorFinishedMsg{err: err, file: filePath, line: lineNumber}
 	})
 }
 
@@ -2525,17 +2504,11 @@ func openURLCmd(url string) tea.Cmd {
 		}
 
 		if cmd == nil {
-			return editorFinishedMsg{err: fmt.Errorf("could not find a browser to open URL")}
+			return urlOpenedMsg{err: fmt.Errorf("could not find a browser to open URL")}
 		}
 
-		// Start the browser in the background
-		err := cmd.Start()
-		if err != nil {
-			return editorFinishedMsg{err: fmt.Errorf("failed to open URL: %w", err)}
-		}
-
-		// Don't wait for the browser to close
-		return editorFinishedMsg{err: nil}
+		// Start the browser in the background and don't wait for it
+		return urlOpenedMsg{err: cmd.Start()}
 	}
 }
 
@@ -2543,6 +2516,17 @@ func openURLCmd(url string) tea.Cmd {
 type tickMsg struct{}
 type timeUpdateMsg struct{}
 type messageTimeoutMsg struct{}
+
+// editorFinishedMsg is sent when the external editor exits. file and line
+// are where it was opened; line 0 means the end of the file. Both are empty
+// when no file was opened.
 type editorFinishedMsg struct {
+	err  error
+	file string
+	line int
+}
+
+// urlOpenedMsg reports the result of starting a browser for a URL.
+type urlOpenedMsg struct {
 	err error
 }

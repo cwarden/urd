@@ -9,6 +9,7 @@ A terminal calendar application inspired by wyrd, providing a TUI frontend for t
 - **Natural Language Event Entry**: Add events using phrases like "tomorrow 2pm meeting"
 - **Live File Watching**: Auto-refresh when remind files change
 - **Background Loading**: Events are fetched from remind one month at a time in the background and cached, so navigation never waits on remind. The months before and after the selected month are prefetched.
+- **Fast Updates After Edits**: When the editor closes, the line it was opened at is run through remind together with only the SET, FSET, OMIT, INCLUDE and IF directives that precede it, while the whole file is reloaded. Its events appear as soon as that single-line run finishes; the full reload then replaces them. While the editor is open, file-change and periodic reloads wait, so the single-line run is not queued behind a full run of remind. A cut reminder leaves the display at once, before the rest of the file is reloaded.
 - **Search & Navigation**: Search for events and quickly navigate to specific dates with goto
 - **Cut/Copy/Paste**: Full clipboard support for event management
 - **URL Support**: Open URLs embedded in reminders directly from the TUI

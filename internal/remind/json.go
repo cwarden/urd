@@ -85,6 +85,13 @@ func extractSubject(body string) string {
 	return rest[:end]
 }
 
+// EventID returns the ID of the event that the reminder on line lineNo of a
+// file produces for date. A reminder produces one event per date it
+// triggers on, so the pair identifies an event.
+func EventID(date time.Time, lineNo int) string {
+	return fmt.Sprintf("evt-%s-%d", date.Format("2006-01-02"), lineNo)
+}
+
 // ParseRemindJSON parses the JSON output from remind
 func ParseRemindJSON(jsonData []byte) ([]RemindJSON, error) {
 	var months []RemindJSON
@@ -142,7 +149,7 @@ func ConvertJSONToEvents(entries []RemindEntry, timezone *time.Location) []Event
 		}
 
 		event := Event{
-			ID:          fmt.Sprintf("evt-%s-%d", entry.Date, entry.LineNo),
+			ID:          EventID(date, entry.LineNo),
 			Date:        eventDate,
 			Description: description,
 			Filename:    entry.Filename,
