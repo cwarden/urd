@@ -31,8 +31,10 @@ type Client struct {
 	RemindPath string
 	// Runner runs remind. NewClient sets it to the remind program built into
 	// this binary where one is available, and to nil elsewhere.
-	Runner    Runner
-	Files     []string
+	Runner Runner
+	Files  []string
+	// Timezone is the zone remind's dates and times are read in. Nil means
+	// the system zone.
 	Timezone  *time.Location
 	watcher   *FileWatcher
 	eventChan chan FileChangeEvent
@@ -43,8 +45,17 @@ func NewClient() *Client {
 		RemindPath: "remind",
 		Runner:     defaultRunner(),
 		Files:      []string{},
-		Timezone:   time.Local,
 	}
+}
+
+// location returns the zone remind's dates and times are read in: Timezone,
+// or the system zone when Timezone is nil. time.Local is read on every call
+// because RefreshLocalZone replaces it when the system zone changes.
+func (c *Client) location() *time.Location {
+	if c.Timezone != nil {
+		return c.Timezone
+	}
+	return time.Local
 }
 
 // UseCommand makes the client run the external remind program at path
@@ -171,7 +182,7 @@ func (c *Client) getEventsForMonth(monthStart time.Time) ([]Event, error) {
 	// Convert JSON entries to events
 	var events []Event
 	for _, month := range months {
-		monthEvents := ConvertJSONToEvents(month.Entries, c.Timezone)
+		monthEvents := ConvertJSONToEvents(month.Entries, c.location())
 		events = append(events, monthEvents...)
 	}
 
@@ -779,7 +790,7 @@ func (c *Client) expandTemplate(template, dateStr, timeStr string) string {
 	// meaning the same moment after a move or a DST rule change. Drop the
 	// clause entirely if the local zone has no name remind would accept —
 	// "TZ  MSG" is a syntax error.
-	if tzName := LocalZoneName(c.Timezone); tzName != "" {
+	if tzName := LocalZoneName(c.location()); tzName != "" {
 		remindLine = strings.ReplaceAll(remindLine, "%tz%", tzName)
 	} else {
 		remindLine = strings.ReplaceAll(remindLine, " TZ %tz%", "")

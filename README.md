@@ -227,6 +227,18 @@ the right also lists the time in that zone, e.g.:
 Coffee with a colleague
 ```
 
+### System Timezone Changes
+
+While urd is running it checks `/etc/localtime` on every periodic refresh and
+once a minute. When the file has been replaced (for example by
+`dpkg-reconfigure tzdata` or `timedatectl set-timezone`), urd loads the new
+zone, keeps the selected calendar date and clock time, and reloads all events,
+so reminders with a `TZ` clause move to their new local time. The built-in
+remind does the same from v6.3.2-ccgo.4 of `github.com/cwarden/remind/v6`,
+which `go.mod` requires; an external `remind_command` is a new process on
+each run and reads the zone itself. The check is skipped when the `TZ` environment variable
+is set, because the zone then comes from `TZ`.
+
 ## Development
 
 ```bash

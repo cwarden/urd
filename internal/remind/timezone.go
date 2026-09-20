@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -65,4 +66,55 @@ func isZoneName(name string) bool {
 		return false
 	}
 	return !strings.ContainsAny(name, " \t\n")
+}
+
+var (
+	localZoneMu   sync.Mutex
+	localZoneInfo os.FileInfo
+)
+
+// RefreshLocalZone loads the system time zone again when /etc/localtime is
+// not the file the previous call saw, and reports whether it replaced
+// time.Local. Go reads /etc/localtime once per process, so without this a
+// running program keeps the zone it started in after the system zone changes
+// (for example through dpkg-reconfigure tzdata or timedatectl set-timezone).
+// The first call only records the file. When TZ is set, Go takes the zone
+// from it and /etc/localtime is not consulted.
+//
+// Replacing time.Local changes the zone of later time.Now results. Values
+// created earlier keep the old zone, so callers should discard what they
+// computed from them. The assignment is not synchronized with other
+// goroutines reading time.Local; it is a single pointer.
+func RefreshLocalZone() bool {
+	if _, set := os.LookupEnv("TZ"); set {
+		return false
+	}
+	info, err := os.Stat(localZoneLink)
+	if err != nil {
+		return false
+	}
+
+	localZoneMu.Lock()
+	defer localZoneMu.Unlock()
+	prev := localZoneInfo
+	localZoneInfo = info
+	if prev == nil {
+		return false
+	}
+	if os.SameFile(prev, info) && prev.ModTime().Equal(info.ModTime()) && prev.Size() == info.Size() {
+		return false
+	}
+
+	data, err := os.ReadFile(localZoneLink)
+	if err != nil {
+		return false
+	}
+	// Go names the zone it loads from /etc/localtime "Local"; keep that name
+	// so LocalZoneName goes on resolving it through the system configuration.
+	loc, err := time.LoadLocationFromTZData("Local", data)
+	if err != nil {
+		return false
+	}
+	time.Local = loc
+	return true
 }

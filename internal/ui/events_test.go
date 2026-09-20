@@ -554,3 +554,59 @@ func TestReloadsWaitWhileTheEditorRuns(t *testing.T) {
 		t.Errorf("%d fetches after the editor exited, want 3", n)
 	}
 }
+
+func TestZoneChangeMovesSelectedDateToTheNewZoneAndReloads(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Skipf("tzdata unavailable: %v", err)
+	}
+	oldLocal, oldRefresh := time.Local, refreshLocalZone
+	t.Cleanup(func() {
+		time.Local = oldLocal
+		refreshLocalZone = oldRefresh
+	})
+
+	sep := time.Date(2026, time.September, 15, 14, 30, 0, 0, time.UTC)
+	src := &fakeSource{events: map[monthKey][]remind.Event{}}
+	m := newCacheTestModel(src, sep)
+	runCmd(t, m, m.ensureEventsLoaded())
+	before := src.callCount()
+	gen := m.cacheGen
+
+	refreshLocalZone = func() bool {
+		time.Local = tokyo
+		return true
+	}
+	_, cmd := m.Update(timeUpdateMsg{})
+	refreshLocalZone = func() bool { return false }
+
+	want := time.Date(2026, time.September, 15, 14, 30, 0, 0, tokyo)
+	if !m.selectedDate.Equal(want) || m.selectedDate.Location() != tokyo {
+		t.Errorf("selectedDate = %v, want %v", m.selectedDate, want)
+	}
+	if m.cacheGen == gen {
+		t.Error("the cache generation did not change")
+	}
+	if cmd == nil || len(m.pendingFetch) == 0 {
+		t.Errorf("no fetch started: cmd=%v pending=%v calls=%d", cmd, m.pendingFetch, src.callCount()-before)
+	}
+}
+
+func TestZoneChangeWhileEditingDoesNotReload(t *testing.T) {
+	oldRefresh := refreshLocalZone
+	t.Cleanup(func() { refreshLocalZone = oldRefresh })
+
+	sep := time.Date(2026, time.September, 15, 0, 0, 0, 0, time.Local)
+	src := &fakeSource{events: map[monthKey][]remind.Event{}}
+	m := newCacheTestModel(src, sep)
+	runCmd(t, m, m.ensureEventsLoaded())
+	m.editing = true
+	gen := m.cacheGen
+
+	refreshLocalZone = func() bool { return true }
+	m.Update(tickMsg{})
+
+	if m.cacheGen != gen || len(m.pendingFetch) != 0 {
+		t.Errorf("a reload started while editing: gen %d -> %d, pending=%v", gen, m.cacheGen, m.pendingFetch)
+	}
+}

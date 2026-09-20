@@ -27,7 +27,7 @@ type P2Client struct {
 	TasksFile string // Path to tasks.rec file
 	ShowAll   bool   // Show all periods (not currently used with work command)
 	// Timezone is the zone work periods are shown in, which determines the
-	// day each one falls on.
+	// day each one falls on. Nil means the system zone.
 	Timezone  *time.Location
 	watcher   *FileWatcher
 	eventChan chan FileChangeEvent
@@ -39,7 +39,6 @@ func NewP2Client() *P2Client {
 		P2Path:    "p2",
 		TasksFile: "tasks.rec",
 		ShowAll:   false,
-		Timezone:  time.Local,
 	}
 }
 

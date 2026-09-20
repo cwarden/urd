@@ -77,7 +77,7 @@ func (c *Client) LineEvents(path string, lineNumber int, monthStart time.Time, m
 			month.Entries[i].Filename = path
 			month.Entries[i].LineNo = last
 		}
-		events = append(events, ConvertJSONToEvents(month.Entries, c.Timezone)...)
+		events = append(events, ConvertJSONToEvents(month.Entries, c.location())...)
 	}
 	return events, nil
 }

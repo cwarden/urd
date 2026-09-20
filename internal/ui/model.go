@@ -204,6 +204,8 @@ func DefaultStyles() Styles {
 }
 
 func (m *Model) Init() tea.Cmd {
+	// Record the current /etc/localtime so that later calls detect a change.
+	refreshLocalZone()
 	return tea.Batch(
 		m.tickCmd(),
 		m.timeUpdateCmd(),
@@ -229,15 +231,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !m.config.AutoRefresh {
 			return m, nil
 		}
+		if cmd := m.followLocalZone(); cmd != nil {
+			return m, tea.Batch(cmd, m.tickCmd())
+		}
 		if !m.editing && m.cacheIsStale(time.Now()) {
 			return m, tea.Batch(m.reloadEvents(), m.tickCmd())
 		}
 		return m, m.tickCmd()
 
 	case timeUpdateMsg:
-		// Update current time display every minute and handle auto-advance
+		// Update current time display every minute and handle auto-advance.
+		// The zone is checked here as well as on tickMsg because tickMsg
+		// stops when auto_refresh is off.
+		zoneCmd := m.followLocalZone()
 		m.handleInactivityAutoAdvance()
-		return m, m.timeUpdateCmd()
+		return m, tea.Batch(zoneCmd, m.timeUpdateCmd())
 
 	case eventLoadedMsg:
 		m.applyEventLoaded(msg)

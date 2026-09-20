@@ -254,6 +254,27 @@ func (m *Model) statSourceFiles() map[string]fileStamp {
 	return stamps
 }
 
+// refreshLocalZone is replaced by tests.
+var refreshLocalZone = remind.RefreshLocalZone
+
+// followLocalZone checks whether the system time zone has changed and, when
+// it has, moves the selected date to the same calendar date and clock time in
+// the new zone and reloads every event, because the cached events carry the
+// old zone. It returns nil when the zone is unchanged. While an editor is
+// open no reload is started; reloadAfterEdit reloads when the editor exits.
+func (m *Model) followLocalZone() tea.Cmd {
+	if !refreshLocalZone() {
+		return nil
+	}
+	d := m.selectedDate
+	m.selectedDate = time.Date(d.Year(), d.Month(), d.Day(), d.Hour(), d.Minute(), d.Second(), d.Nanosecond(), time.Local)
+	if m.editing {
+		return nil
+	}
+	m.showMessage("System time zone changed")
+	return m.reloadEvents()
+}
+
 // cacheIsStale reports whether the periodic refresh should discard the cache:
 // a source file's modification time or size differs from when the cache was
 // built, or the calendar day has changed since then, which moves reminders
